@@ -48,7 +48,11 @@ Local Run
 - Start the API:
   - `python run.py`
 - Health check (example endpoint):
-  - `GET http://localhost:5001/properties` → returns JSON (currently placeholder).
+  - `GET http://localhost:5001/properties` → placeholder; primary use is POST.
+- Primary endpoint (agent + crawl):
+  - `POST http://localhost:5001/properties`
+    - Body: JSON `{ "prompt": "..." }` or form field `prompt`
+    - Response (example): `{ "destination": "Cebu", "url": "https://www.booking.com/searchresults...", "count": 12, "items": [{"availability_link": "..."}], "source": "crawl4ai", "headless": true }`
 
 Configuration & Secrets
 
@@ -80,17 +84,26 @@ API Architecture
   - Prefer `dict` or `(dict, status_code)` from resource methods.
   - Use `error_handler` exceptions for consistent error responses.
 
-Playwright Usage
+Scraping Flow (Property)
 
-- `src/modules/property/use_case.py` demonstrates async Playwright usage; it currently hardcodes `headless=False`.
-- `src/modules/property/use_case2.py` is the recommended pattern:
-  - Respects `PLAYWRIGHT_HEADLESS` and `PLAYWRIGHT_ARGS` from config.
-  - Uses explicit waits instead of fixed sleeps.
-  - Ensures clean resource teardown (context/broswer) using async context managers.
-  - Handles common consent banners and applies light stealth; can save debug artifacts when enabled.
+- Endpoint pipeline (high level):
+  - Extract destination from user prompt via an agent.
+  - Build a temporary Booking URL (today→tomorrow) and fetch available checkbox filters using Playwright.
+  - Parse filters into a name→code map and pass them to the Booking URL agent to generate the final deep link.
+  - Crawl the final URL with Crawl4AI to extract `availability_link` items and return a structured JSON payload.
 - For Docker/VPS, prefer the `use_case2.py` approach or update existing use-cases to read config for headless/args.
 
-Auth Middleware
+Agents & Helpers
+
+- `src/agent_helpers/destination_extractor.py`: extracts destination from prompt.
+- `src/agent_helpers/booking_search_url_agent.py`: Booking Search URL Builder; composes a deep link using destination, dates, occupancy, and provided filter-code map.
+- Backwards alias: `src/agent_helpers/url_generator.py` re-exports the booking URL agent as `url_generator`.
+
+Playwright & Crawl4AI
+
+- `PLAYWRIGHT_HEADLESS` (default True) and `PLAYWRIGHT_ARTIFACT_DIR` control headless mode and artifact output directory.
+- Artifacts path defaults to `./artifacts` (bind-mounted to `/app/artifacts` in Docker prod). Artifacts are ignored by Git.
+- Crawl4AI is used to extract `availability_link` entries from Booking search results.
 
 - `src/middlewares/api_auth_token.py` provides a `requires([...])` decorator.
 - Behavior:
@@ -122,6 +135,11 @@ Adding A New Endpoint (Checklist)
 - Consider auth with `@requires([...])` and document required headers.
 - Return JSON dicts; raise typed errors for failures.
 - Add minimal docstrings and update this file if you introduce patterns.
+
+API Notes (Property)
+
+- Use `POST /properties` with a `prompt` string; it returns `{ destination, url, count, items, source, headless }`.
+- Errors are typed via `InvalidDataError`, `NotFoundError`, and `UnexpectedError` for consistent HTTP responses.
 
 Testing & Validation
 

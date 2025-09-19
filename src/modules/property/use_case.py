@@ -1,6 +1,4 @@
-import asyncio
-import logging
-import os, json
+import os, json, re, asyncio, logging, time
 from base64 import b64decode
 from typing import Any, Dict, List
 from crawl4ai import (
@@ -9,8 +7,14 @@ from crawl4ai import (
     CrawlerRunConfig,
     JsonXPathExtractionStrategy,
 )
+from agents import Runner
+from datetime import date, timedelta
 
 from flask import current_app
+from playwright.async_api import async_playwright
+from src.agent_helpers.destination_extractor import ah_destination_extractor
+from src.agent_helpers.booking_search_url_agent import booking_search_url_agent
+from src.handler.error_handler import InvalidDataError, NotFoundError, UnexpectedError
 
 log = logging.getLogger(__name__)
 
@@ -33,8 +37,22 @@ def _get_bool(name: str, default: bool) -> bool:
         return default
     return str(v).strip().lower() in {"1", "true", "yes", "on"}
 
+async def run_agent_action(input_data, agent, session = None, return_final_output = False):
+  result = await Runner.run(
+    agent,
+    input_data,
+    session=session
+  )
+  if return_final_output:
+    return result.final_output
+  try:
+    action = re.sub(r"```(?:json)?|```", "", result.final_output).strip()
+    return json.loads(action)
+  except Exception as e:
+    print("Invalid JSON:", action, e)
+    raise ValueError('Error occur on running agent')
 
-async def run_crawler() -> Dict[str, Any]:
+async def run_crawler(url) -> Dict[str, Any]:
     headless = _get_bool("PLAYWRIGHT_HEADLESS", True)
     # Save artifacts under repo-local directory by default; override via env
     artifact_dir = os.getenv("PLAYWRIGHT_ARTIFACT_DIR", os.path.join(os.getcwd(), "artifacts"))
@@ -66,15 +84,13 @@ async def run_crawler() -> Dict[str, Any]:
         extraction_strategy=JsonXPathExtractionStrategy(schema, verbose=True),
         wait_for=f"js:{wait_condition}",
         scan_full_page= True,
-        scroll_delay=2,
-        screenshot=True,
-        pdf=True,
+        scroll_delay=1.2,
     )
 
     async with AsyncWebCrawler(verbose=True, config=browser_cfg) as crawler:
         result = await crawler.arun(
             # NOTE: Keeping URL static as requested
-            url='https://www.booking.com/searchresults.html?ss=Cebu&search_selected=true&checkin=2025-11-15&checkout=2025-11-20&group_adults=2&no_rooms=1&group_children=2&nflt=price%3DEUR-150-300-1%3Broomfacility%3D11',
+            url=url,
             config=config,
         )
 
@@ -87,24 +103,6 @@ async def run_crawler() -> Dict[str, Any]:
                 "headless": headless,
                 "error": result.error_message or "crawl_failed",
             }
-
-        # Save artifacts when available
-        if result.screenshot:
-            try:
-                out_path = os.path.join(artifact_dir, "booking_screenshot.png")
-                with open(out_path, "wb") as f:
-                    f.write(b64decode(result.screenshot))
-                log.debug("Saved screenshot: %s", out_path)
-            except Exception as e:
-                log.debug("Failed saving screenshot: %s", e)
-        if result.pdf:
-            try:
-                out_pdf = os.path.join(artifact_dir, "booking_page.pdf")
-                with open(out_pdf, "wb") as f:
-                    f.write(result.pdf)
-                log.debug("Saved PDF: %s", out_pdf)
-            except Exception as e:
-                log.debug("Failed saving PDF: %s", e)
 
         # Extract structured items from JSON string
         items: List[Dict[str, str]] = []
@@ -124,6 +122,185 @@ async def run_crawler() -> Dict[str, Any]:
             "headless": headless,
         }
 
-def get_properties() -> Dict[str, Any]:
-    """Synchronous entrypoint returning structured results."""
-    return run_async(run_crawler())
+
+async def run_playwright(url) -> Dict[str, Any]:
+    """Scrape availability links using raw Playwright.
+
+    - Keeps the Booking URL static (no env keys for URL).
+    - Respects PLAYWRIGHT_HEADLESS and PLAYWRIGHT_ARTIFACT_DIR for runtime behavior.
+    - Returns the same shape as run_crawler for consistency.
+    """
+    headless = _get_bool("PLAYWRIGHT_HEADLESS", True)
+    artifact_dir = os.getenv("PLAYWRIGHT_ARTIFACT_DIR", os.path.join(os.getcwd(), "artifacts"))
+    try:
+        os.makedirs(artifact_dir, exist_ok=True)
+    except Exception:
+        pass
+
+    items: List[Dict[str, str]] = []
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=headless, args=[
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+        ])
+        context = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/116.0.5845.110 Safari/537.36"
+            ),
+            viewport={"width": 1366, "height": 768},
+            locale="en-US",
+            extra_http_headers={
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+
+        # Light stealth: hide webdriver flag
+        await context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+        )
+
+        page = await context.new_page()
+        await page.goto(url, wait_until="domcontentloaded")
+        try:
+            await page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
+
+        results = await page.evaluate("""() => {
+            return Array.from(
+            document.querySelectorAll('input[type="checkbox"]')
+            )
+            .filter(el => {
+            const aria = el.getAttribute('aria-label');
+            return el.name && el.value && aria && aria.trim() !== '';
+            })
+            .map(el => ({
+            name: el.name,
+            value: el.value,
+            ariaLabel: el.getAttribute('aria-label').trim()
+            }));
+        }""")
+
+        checkbox_filter_code = ""
+
+        for i in results:
+            filter = i['ariaLabel'].split(':')[0]
+            code = i['value'].replace('=','%3D')
+            checkbox_filter_code += f"• {filter} → {code}\n"
+
+        await context.close()
+        await browser.close()
+
+        return checkbox_filter_code
+
+    return {
+        "count": len(items),
+        "items": items,
+        "source": "playwright",
+        "headless": headless,
+    }
+
+def get_properties(prompt: str) -> Dict[str, Any]:
+    """Extract destination from a free‑form prompt using the agent.
+
+    - Validates input and enforces a timeout to avoid hanging requests.
+    - Maps errors to typed HTTP-friendly exceptions.
+    - Returns a structured dict: { destination, source, duration_ms }.
+    """
+    if not isinstance(prompt, str):
+        raise InvalidDataError("Field 'prompt' must be a string.")
+    prompt = prompt.strip()
+    if not prompt:
+        raise InvalidDataError("Field 'prompt' is required and must be non-empty.")
+
+    # Keep logs safe and concise
+    log_prompt = prompt if len(prompt) <= 256 else (prompt[:256] + "…")
+
+    started = time.monotonic()
+    try:
+        # Enforce an upper bound on agent processing time
+        destination_data = run_async(
+            asyncio.wait_for(
+                run_agent_action(prompt, ah_destination_extractor, None, False),
+                timeout=30,
+            )
+        )
+    except asyncio.TimeoutError:
+        duration_ms = int((time.monotonic() - started) * 1000)
+        log.warning("destination extraction timed out; duration_ms=%d prompt='%s'", duration_ms, log_prompt)
+        raise UnexpectedError("Destination extraction timed out.")
+    except InvalidDataError:
+        # Re-raise as-is for consistent HTTP response
+        raise
+    except Exception as e:
+        duration_ms = int((time.monotonic() - started) * 1000)
+        log.exception("destination extraction failed; duration_ms=%d error=%s", duration_ms, e)
+        raise UnexpectedError("Destination extraction failed.")
+
+    destination = None
+    if isinstance(destination_data, dict):
+        destination = destination_data.get("destination")
+
+    if not isinstance(destination, str) or not destination.strip():
+        raise NotFoundError("No destination extracted from the prompt.")
+
+    destination = destination.strip()
+    duration_ms = int((time.monotonic() - started) * 1000)
+    log.debug("destination extracted; duration_ms=%d dest='%s'", duration_ms, destination)
+
+    # New Code
+    # 1) Build an initial URL (today→tomorrow) to fetch available checkbox filters,
+    #    then parse them into a name→code map for the URL agent.
+    date_f_str = date.today().strftime("%Y-%m-%d")
+    date_t_str = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+    initial_url = (
+        f"https://www.booking.com/searchresults.html?ss={destination}"
+        f"&search_selected=true&checkin={date_f_str}&checkout={date_t_str}"
+        f"&group_adults=2&no_rooms=1&group_children=0"
+    )
+
+    def _parse_checkbox_filters(bulleted: str) -> Dict[str, str]:
+        mapping: Dict[str, str] = {}
+        if not isinstance(bulleted, str):
+            return mapping
+        for line in bulleted.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Accept formats like "• Filter Name → code" or "Filter Name -> code"
+            sep = "→" if "→" in line else ("->" if "->" in line else None)
+            if not sep:
+                continue
+            left, right = line.split(sep, 1)
+            name = left.replace("•", "").strip()
+            code = right.strip()
+            if name and code:
+                mapping[name] = code
+        return mapping
+
+    raw_filters = run_async(run_playwright(initial_url))
+    filters_map = _parse_checkbox_filters(raw_filters)
+    filters_json = json.dumps(filters_map, ensure_ascii=False)
+
+    # 2) Ask the Booking URL agent to build the final URL using the
+    #    extracted destination, default occupancy, and the filter code map.
+    url_agent = booking_search_url_agent(filters_json)
+    url_data = run_async(run_agent_action(prompt, url_agent, None, False))
+    if not isinstance(url_data, dict) or "url" not in url_data or not url_data["url"]:
+        raise UnexpectedError("Failed to generate a search URL.")
+
+    final_url = url_data["url"]
+
+    # 3) Crawl the final URL and return structured results with context
+    crawl = run_async(run_crawler(final_url))
+    if not isinstance(crawl, dict):
+        crawl = {"count": 0, "items": [], "source": "crawl4ai", "headless": _get_bool("PLAYWRIGHT_HEADLESS", True)}
+    crawl.update({
+        "destination": destination,
+        "url": final_url,
+    })
+    return crawl
