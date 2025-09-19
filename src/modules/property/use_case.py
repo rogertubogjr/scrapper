@@ -68,14 +68,44 @@ async def run_crawler(url) -> Dict[str, Any]:
     }"""
 
     schema = {
-      "name": "Hotels",
-      "baseSelector": "//div[@data-testid='property-card']",
-      "fields": [
+    "name": "Hotels",
+    "baseSelector": "//div[@data-testid='property-card']",
+    "fields": [
             {
-              "name":"availability_link",
-              "selector":".//div[@data-testid='availability-cta']/a",
-              "type":"attribute",
-              "attribute":"href"
+                "name": "title",
+                "selector": ".//div[@data-testid='title']",
+                "type": "text"
+            },
+            {
+                "name": "link",
+                "selector": ".//a[contains(@href,'/hotel/')][1]",
+                "type": "attribute",
+                "attribute": "href"
+            },
+            {
+                "name": "location",
+                "selector": ".//span[contains(text(),'km') or contains(text(),'from') or contains(text(),'Show on map')]/..",
+                "type": "text"
+            },
+            {
+                "name": "rating_reviews",
+                "selector": ".//div[@data-testid='review-score' or .//span[contains(text(),'review')]]",
+                "type": "text"
+            },
+            {
+                "name": "room_info",
+                "selector": ".//div[contains(., 'Room') or .//h4]",
+                "type": "text"
+            },
+            {
+                "name": "price",
+                "selector": ".//span[@data-testid='price-and-discounted-price']",
+                "type": "text"
+            },
+            {
+                "name": "fees",
+                "selector": ".//div[contains(., 'tax') or contains(., 'fee')]",
+                "type": "text"
             }
         ]
     }
@@ -104,14 +134,46 @@ async def run_crawler(url) -> Dict[str, Any]:
                 "error": result.error_message or "crawl_failed",
             }
 
-        # Extract structured items from JSON string
+        # Extract structured items from JSON string (updated schema)
+        # Expected fields per item: title, link, location, rating_reviews, room_info, price, fees
         items: List[Dict[str, str]] = []
         try:
-            data = json.loads(result.extracted_content) if result.extracted_content else []
+            raw = result.extracted_content or "[]"
+            data = json.loads(raw)
             if isinstance(data, list):
                 for x in data:
-                    if isinstance(x, dict) and x.get("availability_link"):
-                        items.append({"availability_link": x.get("availability_link")})
+                    if not isinstance(x, dict):
+                        continue
+                    itm: Dict[str, str] = {}
+                    title = x.get("title")
+                    link = x.get("link")
+                    location = x.get("location")
+                    rating = x.get("rating_reviews")
+                    room_info = x.get("room_info")
+                    price = x.get("price")
+                    fees = x.get("fees")
+
+                    if isinstance(title, str) and title.strip():
+                        itm["title"] = title.strip()
+                    if isinstance(link, str) and link.strip():
+                        # Normalize relative links to absolute
+                        l = link.strip()
+                        if l.startswith("/"):
+                            l = "https://www.booking.com" + l
+                        itm["link"] = l
+                    if isinstance(location, str) and location.strip():
+                        itm["location"] = location.strip()
+                    if isinstance(rating, str) and rating.strip():
+                        itm["rating_reviews"] = rating.strip()
+                    if isinstance(room_info, str) and room_info.strip():
+                        itm["room_info"] = room_info.strip()
+                    if isinstance(price, str) and price.strip():
+                        itm["price"] = price.strip()
+                    if isinstance(fees, str) and fees.strip():
+                        itm["fees"] = fees.strip()
+
+                    if itm:
+                        items.append(itm)
         except Exception as e:
             log.debug("Failed parsing extracted content: %s", e)
 
@@ -299,8 +361,9 @@ def get_properties(prompt: str) -> Dict[str, Any]:
     crawl = run_async(run_crawler(final_url))
     if not isinstance(crawl, dict):
         crawl = {"count": 0, "items": [], "source": "crawl4ai", "headless": _get_bool("PLAYWRIGHT_HEADLESS", True)}
-    crawl.update({
-        "destination": destination,
-        "url": final_url,
-    })
+    # Attach useful context but omit non-essential fields
+    crawl["destination"] = destination
+    # Drop debugging/runtime fields not needed by clients
+    crawl.pop("headless", None)
+    crawl.pop("url", None)
     return crawl

@@ -1,6 +1,7 @@
 from flask_restful import Resource
 from src.handler.error_handler import InvalidDataError
 from flask import request
+import json
 
 from .use_case import get_properties
 
@@ -11,26 +12,48 @@ from src.middlewares.api_auth_token import requires
 class Properties(Resource):
     # @requires([UserType.ADMIN.value])
     def get(self):
-        return get_properties()
+        # Accept any query parameters. If there is exactly one param, use its
+        # value directly; otherwise stringify the whole query dict.
+        args = request.args.to_dict(flat=True)
+        if not args:
+            raise InvalidDataError("Supply query parameters or use POST with a body.")
+        if len(args) == 1:
+            prompt = next(iter(args.values()))
+        else:
+            prompt = json.dumps(args, ensure_ascii=False)
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise InvalidDataError("Request input must be a non-empty string or JSON.")
+        return get_properties(prompt.strip())
 
     def post(self):
-        """Accept a plain text prompt from clients.
+        """Accept arbitrary text, JSON, or form data and pass it as a string.
 
-        Accepts either JSON (application/json) with a "prompt" field, or
-        form-encoded (application/x-www-form-urlencoded or multipart/form-data)
-        with a "prompt" field from a textarea.
+        - If JSON (any structure), stringify the entire payload.
+        - If form data, use the single field's value; if multiple fields, stringify the dict.
+        - If raw text (text/plain), use the body as-is.
         """
         prompt = None
 
         if request.is_json:
-            data = request.get_json(silent=True) or {}
-            prompt = data.get("prompt")
+            data = request.get_json(silent=True)
+            try:
+                prompt = json.dumps(data, ensure_ascii=False)
+            except Exception:
+                prompt = str(data)
         else:
-            prompt = request.form.get("prompt")
+            form_dict = request.form.to_dict(flat=True)
+            if form_dict:
+                if len(form_dict) == 1:
+                    prompt = next(iter(form_dict.values()))
+                else:
+                    prompt = json.dumps(form_dict, ensure_ascii=False)
+            elif request.data:
+                try:
+                    prompt = request.get_data(as_text=True)
+                except Exception:
+                    prompt = None
 
         if not isinstance(prompt, str) or not prompt.strip():
-            raise InvalidDataError("Field 'prompt' is required and must be a non-empty string.")
+            raise InvalidDataError("Request body must provide non-empty input as text, JSON, or form data.")
 
-        prompt = prompt.strip()
-
-        return get_properties(prompt)
+        return get_properties(prompt.strip())
