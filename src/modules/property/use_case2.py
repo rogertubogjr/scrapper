@@ -85,7 +85,7 @@ async def run_playwright() -> Dict[str, Any]:
     }
 
 
-def get_properties() -> Dict[str, Any]:
+def get_properties_v2() -> Dict[str, Any]:
     """Synchronous entrypoint returning structured results."""
     data = run_async(run_playwright())
     return data
