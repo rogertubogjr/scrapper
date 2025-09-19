@@ -59,8 +59,7 @@ async def run_playwright() -> Dict[str, Any]:
     )
 
     url = (
-        "https://www.booking.com/searchresults.html?ss=cebu&search_selected=true&"
-        "checkin=2025-10-10&checkout=2025-10-11&group_adults=2&no_rooms=1&group_children=0"
+        "https://www.booking.com/searchresults.html?ss=cebu&search_selected=true&checkin=2025-10-10&checkout=2025-10-11&group_adults=2&no_rooms=1&group_children=0"
     )
 
     # Use context managers to ensure proper tear-down
@@ -87,7 +86,30 @@ async def run_playwright() -> Dict[str, Any]:
 
         page = await context.new_page()
 
-        await page.goto(url, wait_until="domcontentloaded")
+        # Record navigation details before any interactions
+        start_url = url
+        response = await page.goto(url, wait_until="domcontentloaded")
+        pre_url = page.url
+        resp_url = response.url if response else None
+        try:
+            resp_status = response.status if response else None
+        except Exception:
+            resp_status = None
+        # Always log initial navigation details
+        log.warning(
+            "NAV: start=%s resp_url=%s resp_status=%s pre_url=%s",
+            start_url,
+            resp_url,
+            resp_status,
+            pre_url,
+        )
+        # Optional early screenshot at landing URL
+        if debug_artifacts:
+            try:
+                os.makedirs(artifact_dir, exist_ok=True)
+                await page.screenshot(path=f"{artifact_dir}/properties_pre.png", full_page=True)
+            except Exception as e:
+                log.debug("Failed to save pre screenshot: %s", e)
         # Allow network to settle a bit
         try:
             await page.wait_for_load_state("networkidle", timeout=10000)
@@ -140,6 +162,11 @@ async def run_playwright() -> Dict[str, Any]:
             # still continue to evaluate; may produce zero results
             pass
 
+        # Log URL after handling cookies and waits
+        post_url = page.url
+        # Always log post URL after interactions
+        log.warning("NAV: post_url=%s (was %s)", post_url, pre_url)
+
         # Extract the filter information
         results: List[Dict[str, str]] = await page.evaluate(
             """
@@ -155,26 +182,38 @@ async def run_playwright() -> Dict[str, Any]:
                 }))
             """
         )
-        print(artifact_dir)
-        # If empty in production/headless, capture debug artifacts
-        if debug_artifacts and len(results) == 0:
+        # Save debug artifacts to help diagnose navigation/DOM differences
+        if debug_artifacts:
             try:
-
                 # Ensure artifact directory exists
                 try:
                     os.makedirs(artifact_dir, exist_ok=True)
                 except Exception:
                     pass
-                await page.screenshot(path=f"{artifact_dir}/properties_screenshot.png", full_page=True)
+                # Post-action screenshot
+                await page.screenshot(path=f"{artifact_dir}/properties_post.png", full_page=True)
                 html = await page.content()
                 snippet = html[:100000]
-                with open(f"{artifact_dir}/properties_snippet.html", "w", encoding="utf-8") as f:
-                    f.write(snippet)
+                # Always record navigation URLs
+                try:
+                    with open(f"{artifact_dir}/properties_urls.txt", "w", encoding="utf-8") as f:
+                        f.write(f"start_url: {start_url}\n")
+                        f.write(f"resp_url: {resp_url}\n")
+                        f.write(f"pre_url: {pre_url}\n")
+                        f.write(f"post_url: {post_url}\n")
+                except Exception:
+                    pass
+                # Only dump HTML snippet when we didn't find results to reduce noise
+                if len(results) == 0:
+                    with open(f"{artifact_dir}/properties_snippet.html", "w", encoding="utf-8") as f:
+                        f.write(snippet)
                 title = await page.title()
                 log.debug(
-                    "Saved debug artifacts: title=%s screenshot=%s snippet=%s",
+                    "Saved debug artifacts: title=%s pre=%s post=%s urls=%s snippet=%s",
                     title,
-                    f"{artifact_dir}/properties_screenshot.png",
+                    f"{artifact_dir}/properties_pre.png",
+                    f"{artifact_dir}/properties_post.png",
+                    f"{artifact_dir}/properties_urls.txt",
                     f"{artifact_dir}/properties_snippet.html",
                 )
             except Exception as e:
