@@ -32,6 +32,8 @@ async def run_playwright() -> Dict[str, Any]:
         "--no-sandbox",
         "--disable-setuid-sandbox",
     ]
+    stealth = bool(cfg.get("PLAYWRIGHT_STEALTH", True))
+    debug_artifacts = bool(cfg.get("PLAYWRIGHT_DEBUG_ARTIFACTS", False))
 
     url = (
         "https://www.booking.com/searchresults.html?ss=cebu&search_selected=true&"
@@ -49,13 +51,56 @@ async def run_playwright() -> Dict[str, Any]:
             ),
             viewport={"width": 1366, "height": 768},
             locale="en-US",
+            extra_http_headers={
+                "Accept-Language": "en-US,en;q=0.9",
+            },
         )
+
+        # Light stealth: hide webdriver flag
+        if stealth:
+            await context.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+            )
+
         page = await context.new_page()
 
         await page.goto(url, wait_until="domcontentloaded")
+        # Allow network to settle a bit
+        try:
+            await page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
 
-        # Prefer explicit waits over fixed timeouts
-        await page.wait_for_selector('input[type="checkbox"]', timeout=20000)
+        # Try to accept cookie banners if present
+        async def try_accept_cookies() -> None:
+            try:
+                sel = (
+                    "#onetrust-accept-btn-handler, "
+                    "button:has-text('Accept all'), "
+                    "button:has-text('Accept'), "
+                    "button:has-text('I agree'), "
+                    "button[aria-label*='Accept']"
+                )
+                btn = page.locator(sel).first
+                # Use locator() API's first() method
+                btn = page.locator(sel).first
+                if await btn.count() > 0:
+                    await btn.click(timeout=3000)
+            except Exception:
+                # Non-fatal; proceed
+                pass
+
+        await try_accept_cookies()
+
+        # Prefer specific filters container; fallback to any checkbox
+        try:
+            await page.wait_for_selector(
+                "[data-filters-group] input[type=checkbox], input[type=checkbox][name][value]",
+                timeout=20000,
+            )
+        except Exception:
+            # still continue to evaluate; may produce zero results
+            pass
 
         # Extract the filter information
         results: List[Dict[str, str]] = await page.evaluate(
@@ -68,10 +113,28 @@ async def run_playwright() -> Dict[str, Any]:
                 .map(el => ({
                     name: el.name,
                     value: el.value,
-                    ariaLabel: el.getAttribute('aria-label').trim()
+                    ariaLabel: el.getAttribute('aria-label')?.trim() || ''
                 }))
             """
         )
+
+        # If empty in production/headless, capture debug artifacts
+        if debug_artifacts and len(results) == 0:
+            try:
+                await page.screenshot(path="/tmp/properties_screenshot.png", full_page=True)
+                html = await page.content()
+                snippet = html[:100000]
+                with open("/tmp/properties_snippet.html", "w", encoding="utf-8") as f:
+                    f.write(snippet)
+                title = await page.title()
+                log.debug(
+                    "Saved debug artifacts: title=%s screenshot=%s snippet=%s",
+                    title,
+                    "/tmp/properties_screenshot.png",
+                    "/tmp/properties_snippet.html",
+                )
+            except Exception as e:
+                log.debug("Failed to save debug artifacts: %s", e)
 
         # Close resources in reverse order
         await context.close()
@@ -89,4 +152,3 @@ def get_properties() -> Dict[str, Any]:
     """Synchronous entrypoint returning structured results."""
     data = run_async(run_playwright())
     return data
-

@@ -56,6 +56,9 @@ Configuration & Secrets
 - Config loading: `src/app.py` loads `instance/config.py` via `app.config.from_pyfile('config.py')`.
   - `instance/config.py` loads environment variables via `python-dotenv` if a `.env` file is present.
   - Core keys: `DEBUG`, `SECRET_KEY`, `TOKEN`, `PLAYWRIGHT_HEADLESS` (default True), `PLAYWRIGHT_ARGS`.
+  - Optional keys used by scrapers:
+    - `PLAYWRIGHT_STEALTH` (default True): hide `navigator.webdriver` via init script.
+    - `PLAYWRIGHT_DEBUG_ARTIFACTS` (default False): when enabled and a scrape yields zero results, saves `/tmp/properties_screenshot.png` and `/tmp/properties_snippet.html` for debugging.
 - Auth expectations for `api_auth_token.py`:
   - `TOKEN` for static token checks, or `SECRET_KEY` for JWT (HS256) verification.
   - Clients may send tokens via `x-access-token` or `Authorization: Bearer <token>`.
@@ -77,6 +80,7 @@ Playwright Usage
   - Respects `PLAYWRIGHT_HEADLESS` and `PLAYWRIGHT_ARGS` from config.
   - Uses explicit waits instead of fixed sleeps.
   - Ensures clean resource teardown (context/broswer) using async context managers.
+  - Handles common consent banners and applies light stealth; can save debug artifacts when enabled.
 - For Docker/VPS, prefer the `use_case2.py` approach or update existing use-cases to read config for headless/args.
 
 Auth Middleware
