@@ -11,6 +11,9 @@ services:
     environment:
       - DEBUG=false
       - PLAYWRIGHT_HEADLESS=true
+    volumes:
+      # Persist scraper artifacts from container to host
+      - ./artifacts:/app/artifacts
     # In production we do not mount the source tree
     restart: unless-stopped
     shm_size: '1gb'
