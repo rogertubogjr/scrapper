@@ -58,8 +58,13 @@ async def run_playwright() -> Dict[str, Any]:
         os.path.join(os.getcwd(), "artifacts"),
     )
 
+    # Stronger URL to reduce redirections dropping the search term
+    search_term = "cebu"
     url = (
-        "https://www.booking.com/searchresults.html?ss=cebu&search_selected=true&checkin=2025-10-10&checkout=2025-10-11&group_adults=2&no_rooms=1&group_children=0"
+        "https://www.booking.com/searchresults.html?"
+        f"ss={search_term}&ssne={search_term}&ssne_untouched={search_term}"
+        "&checkin=2025-10-10&checkout=2025-10-11&group_adults=2&no_rooms=1&group_children=0"
+        "&lang=en-us&sb=1"
     )
 
     # Use context managers to ensure proper tear-down
@@ -88,7 +93,7 @@ async def run_playwright() -> Dict[str, Any]:
 
         # Record navigation details before any interactions
         start_url = url
-        response = await page.goto(url, wait_until="domcontentloaded")
+        response = await page.goto(url, wait_until="domcontentloaded", referer="https://www.booking.com/")
         pre_url = page.url
         resp_url = response.url if response else None
         try:
@@ -136,6 +141,17 @@ async def run_playwright() -> Dict[str, Any]:
                 pass
 
         await try_accept_cookies()
+
+        # If redirected away from search results, attempt a UI search fallback
+        if "searchresults" not in page.url:
+            try:
+                search_input = page.locator('input[name="ss"]').first
+                await search_input.wait_for(state="visible", timeout=8000)
+                await search_input.fill(search_term)
+                await page.keyboard.press("Enter")
+                await page.wait_for_url("**/searchresults.html**", timeout=15000)
+            except Exception as e:
+                log.warning("Fallback UI search failed: %s", e)
 
         # Optional: print page content (truncated) for debugging
         if debug_print:
