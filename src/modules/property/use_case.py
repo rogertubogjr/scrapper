@@ -45,6 +45,12 @@ async def run_playwright() -> Dict[str, Any]:
 
     stealth = _get_bool("PLAYWRIGHT_STEALTH", True)
     debug_artifacts = _get_bool("PLAYWRIGHT_DEBUG_ARTIFACTS", False)
+    debug_print = _get_bool("PLAYWRIGHT_DEBUG_PRINT", False)
+    # Max characters to print when debug_print is enabled
+    try:
+        debug_print_max = int(os.getenv("PLAYWRIGHT_DEBUG_PRINT_MAX", "10000"))
+    except ValueError:
+        debug_print_max = 10000
     # Default to a repo-local artifacts directory so files are easy to find.
     # Override via PLAYWRIGHT_ARTIFACT_DIR when needed (e.g., container copy or bind mount).
     artifact_dir = os.getenv(
@@ -109,6 +115,21 @@ async def run_playwright() -> Dict[str, Any]:
 
         await try_accept_cookies()
 
+        # Optional: print page content (truncated) for debugging
+        if debug_print:
+            try:
+                title = await page.title()
+                html = await page.content()
+                snippet = html if len(html) <= debug_print_max else html[:debug_print_max]
+                log.warning(
+                    "DEBUG_PRINT: title=%s html_length=%d snippet=\n%s",
+                    title,
+                    len(html),
+                    snippet,
+                )
+            except Exception as e:
+                log.warning("DEBUG_PRINT failed: %s", e)
+
         # Prefer specific filters container; fallback to any checkbox
         try:
             await page.wait_for_selector(
@@ -134,10 +155,11 @@ async def run_playwright() -> Dict[str, Any]:
                 }))
             """
         )
-
+        print(artifact_dir)
         # If empty in production/headless, capture debug artifacts
         if debug_artifacts and len(results) == 0:
             try:
+
                 # Ensure artifact directory exists
                 try:
                     os.makedirs(artifact_dir, exist_ok=True)
