@@ -147,3 +147,32 @@ Contact & Next Steps
 
 - If you introduce new modules or conventions, add a short note here to keep future work consistent.
 - Maintain Docker/VPS compatibility for any new endpoints, middlewares, or Playwright changes (headless config, args, and resource teardown). Add notes here when patterns change.
+
+Git Flow
+
+- Branch roles: `main` = production; `develop` = integration.
+- Prefixes: `feature/`, `bugfix/`, `release/`, `hotfix/`, `support/`; tags prefixed with `v` (e.g., `v1.2.3`).
+- Start work:
+  - Feature: `git flow feature start <slug>` → PR to `develop`.
+  - Bugfix: `git flow bugfix start <slug>` → PR to `develop`.
+- Stabilize/release:
+  - Release: `git flow release start <x.y.z>`; finalize via PRs to `main` and back-merge into `develop`.
+  - Hotfix: `git flow hotfix start <x.y.z>` from `main`; finalize via PRs to `main` and back-merge into `develop`.
+- Finish with PRs (no direct pushes to protected branches). Use squash or merge per repo policy.
+  Solo Branch Protection (Optional Now)
+
+- main
+  - Require a pull request before merging.
+  - Required reviews: 0 (solo developer).
+  - Required status checks: `lint` only (add CI job named `lint`).
+  - Optional: require branches to be up to date; require conversation resolution; disallow force pushes and deletions; enforce on admins if you want no bypass.
+- develop
+  - Option A: mirror `main` without required checks (no blockers).
+  - Option B: leave unprotected; keep a PR habit when feasible.
+- How to enable later (UI steps)
+  - Create `.github/workflows/lint.yml` with a job named `lint` (e.g., ruff/flake8) that runs on PRs to `main`.
+  - GitHub → Settings → Branches → Add rule for `main`:
+    - Require a pull request before merging; set required reviews to 0.
+    - Require status checks to pass before merging → select `lint`.
+    - Optionally: require branches to be up to date; require conversation resolution; block force pushes/deletions.
+  - Optionally add a rule for `develop` with no required checks.
