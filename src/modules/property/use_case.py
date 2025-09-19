@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from typing import Any, Dict, List
 
 from flask import current_app
@@ -32,8 +33,19 @@ async def run_playwright() -> Dict[str, Any]:
         "--no-sandbox",
         "--disable-setuid-sandbox",
     ]
-    stealth = bool(cfg.get("PLAYWRIGHT_STEALTH", True))
-    debug_artifacts = bool(cfg.get("PLAYWRIGHT_DEBUG_ARTIFACTS", False))
+    # Read flags from Flask config, with environment fallbacks so we don't
+    # require instance/config.py entries in all environments.
+    def _get_bool(name: str, default: bool) -> bool:
+        v = cfg.get(name)
+        if v is None:
+            v = os.getenv(name)
+        if v is None:
+            return default
+        return str(v).strip().lower() in {"1", "true", "yes", "on"}
+
+    stealth = _get_bool("PLAYWRIGHT_STEALTH", True)
+    debug_artifacts = _get_bool("PLAYWRIGHT_DEBUG_ARTIFACTS", False)
+    artifact_dir = os.getenv("PLAYWRIGHT_ARTIFACT_DIR", "/tmp")
 
     url = (
         "https://www.booking.com/searchresults.html?ss=cebu&search_selected=true&"
@@ -121,17 +133,22 @@ async def run_playwright() -> Dict[str, Any]:
         # If empty in production/headless, capture debug artifacts
         if debug_artifacts and len(results) == 0:
             try:
-                await page.screenshot(path="/tmp/properties_screenshot.png", full_page=True)
+                # Ensure artifact directory exists
+                try:
+                    os.makedirs(artifact_dir, exist_ok=True)
+                except Exception:
+                    pass
+                await page.screenshot(path=f"{artifact_dir}/properties_screenshot.png", full_page=True)
                 html = await page.content()
                 snippet = html[:100000]
-                with open("/tmp/properties_snippet.html", "w", encoding="utf-8") as f:
+                with open(f"{artifact_dir}/properties_snippet.html", "w", encoding="utf-8") as f:
                     f.write(snippet)
                 title = await page.title()
                 log.debug(
                     "Saved debug artifacts: title=%s screenshot=%s snippet=%s",
                     title,
-                    "/tmp/properties_screenshot.png",
-                    "/tmp/properties_snippet.html",
+                    f"{artifact_dir}/properties_screenshot.png",
+                    f"{artifact_dir}/properties_snippet.html",
                 )
             except Exception as e:
                 log.debug("Failed to save debug artifacts: %s", e)
