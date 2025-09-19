@@ -61,6 +61,11 @@ Configuration & Secrets
     - `PLAYWRIGHT_DEBUG_ARTIFACTS` (default False): when enabled and a scrape yields zero results, saves `/tmp/properties_screenshot.png` and `/tmp/properties_snippet.html` for debugging.
     - `PLAYWRIGHT_DEBUG_PRINT` (default False): when enabled, logs the page title and a truncated HTML snippet (default 10k chars) at WARNING level after navigation.
     - `PLAYWRIGHT_DEBUG_PRINT_MAX` (default 10000): max characters of HTML to log when debug print is enabled.
+    - `BOOKING_LOCATION` (default "cebu"): destination text to search.
+    - `BOOKING_CHECKIN` (default `YYYY-MM-DD`): check-in date.
+    - `BOOKING_CHECKOUT` (default `YYYY-MM-DD`): check-out date.
+    - `BOOKING_ADULTS` (default 2), `BOOKING_ROOMS` (default 1), `BOOKING_CHILDREN` (default 0): occupancy.
+    - `BOOKING_LANG` (default `en-us`): language for Booking URLs.
 - Auth expectations for `api_auth_token.py`:
   - `TOKEN` for static token checks, or `SECRET_KEY` for JWT (HS256) verification.
   - Clients may send tokens via `x-access-token` or `Authorization: Bearer <token>`.

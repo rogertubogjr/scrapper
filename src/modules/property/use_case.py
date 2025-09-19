@@ -1,10 +1,16 @@
 import asyncio
 import logging
-import os
+import os, json
+from base64 import b64decode
 from typing import Any, Dict, List
+from crawl4ai import (
+    AsyncWebCrawler,
+    BrowserConfig,
+    CrawlerRunConfig,
+    JsonXPathExtractionStrategy,
+)
 
 from flask import current_app
-from playwright.async_api import async_playwright
 
 log = logging.getLogger(__name__)
 
@@ -18,179 +24,106 @@ def run_async(coro):
     finally:
         loop.close()
 
-
-async def run_playwright() -> Dict[str, Any]:
-    """Playwright flow with config-driven headless and explicit waits.
-
-    Reads config from Flask `current_app.config`:
-      - PLAYWRIGHT_HEADLESS: bool (default True)
-      - PLAYWRIGHT_ARGS: list of chromium args
-    """
+def _get_bool(name: str, default: bool) -> bool:
     cfg = current_app.config if current_app else {}
-    headless = bool(cfg.get("PLAYWRIGHT_HEADLESS", True))
-    chromium_args = cfg.get("PLAYWRIGHT_ARGS") or [
-        "--disable-blink-features=AutomationControlled",
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-    ]
-    # Read flags from Flask config, with environment fallbacks so we don't
-    # require instance/config.py entries in all environments.
-    def _get_bool(name: str, default: bool) -> bool:
-        v = cfg.get(name)
-        if v is None:
-            v = os.getenv(name)
-        if v is None:
-            return default
-        return str(v).strip().lower() in {"1", "true", "yes", "on"}
+    v = cfg.get(name)
+    if v is None:
+        v = os.getenv(name)
+    if v is None:
+        return default
+    return str(v).strip().lower() in {"1", "true", "yes", "on"}
 
-    stealth = _get_bool("PLAYWRIGHT_STEALTH", True)
-    debug_artifacts = _get_bool("PLAYWRIGHT_DEBUG_ARTIFACTS", False)
-    debug_print = _get_bool("PLAYWRIGHT_DEBUG_PRINT", False)
-    # Max characters to print when debug_print is enabled
+
+async def run_crawler() -> Dict[str, Any]:
+    headless = _get_bool("PLAYWRIGHT_HEADLESS", True)
+    # Save artifacts under repo-local directory by default; override via env
+    artifact_dir = os.getenv("PLAYWRIGHT_ARTIFACT_DIR", os.path.join(os.getcwd(), "artifacts"))
     try:
-        debug_print_max = int(os.getenv("PLAYWRIGHT_DEBUG_PRINT_MAX", "10000"))
-    except ValueError:
-        debug_print_max = 10000
-    # Default to a repo-local artifacts directory so files are easy to find.
-    # Override via PLAYWRIGHT_ARTIFACT_DIR when needed (e.g., container copy or bind mount).
-    artifact_dir = os.getenv(
-        "PLAYWRIGHT_ARTIFACT_DIR",
-        os.path.join(os.getcwd(), "artifacts"),
-    )
+        os.makedirs(artifact_dir, exist_ok=True)
+    except Exception:
+        pass
 
-    url = (
-        "https://www.booking.com/searchresults.html?ss=cebu&search_selected=true&checkin=2025-10-10&checkout=2025-10-11&group_adults=2&no_rooms=1&group_children=0"
-    )
+    browser_cfg = BrowserConfig(headless=headless)
+    wait_condition = """() => {
+        const items = document.querySelectorAll('[data-testid="property-card"]');
+        return items.length > 5;
+    }"""
 
-    # Use context managers to ensure proper tear-down
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=headless, args=chromium_args)
-        context = await browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/116.0.5845.110 Safari/537.36"
-            ),
-            viewport={"width": 1366, "height": 768},
-            locale="en-US",
-            extra_http_headers={
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-        )
-
-        page = await context.new_page()
-
-        # Record navigation details before any interactions
-        start_url = url
-        response = await page.goto(url, wait_until="domcontentloaded")
-        pre_url = page.url
-        resp_url = response.url if response else None
-        try:
-            resp_status = response.status if response else None
-        except Exception:
-            resp_status = None
-        # Always log initial navigation details
-        log.warning(
-            "NAV: start=%s resp_url=%s resp_status=%s pre_url=%s",
-            start_url,
-            resp_url,
-            resp_status,
-            pre_url,
-        )
-        # Optional early screenshot at landing URL
-        if debug_artifacts:
-            try:
-                os.makedirs(artifact_dir, exist_ok=True)
-                await page.screenshot(path=f"{artifact_dir}/properties_pre.png", full_page=True)
-            except Exception as e:
-                log.debug("Failed to save pre screenshot: %s", e)
-        # Allow network to settle a bit
-        try:
-            await page.wait_for_load_state("networkidle", timeout=10000)
-        except Exception:
-            pass
-
-        # Prefer specific filters container; fallback to any checkbox
-        try:
-            await page.wait_for_selector(
-                "[data-filters-group] input[type=checkbox], input[type=checkbox][name][value]",
-                timeout=20000,
-            )
-        except Exception:
-            # still continue to evaluate; may produce zero results
-            pass
-
-        # Log URL after handling cookies and waits
-        post_url = page.url
-        # Always log post URL after interactions
-        log.warning("NAV: post_url=%s (was %s)", post_url, pre_url)
-
-        # Extract the filter information
-        results: List[Dict[str, str]] = await page.evaluate(
-            """
-            () => Array.from(document.querySelectorAll('input[type="checkbox"]'))
-                .filter(el => {
-                    const aria = el.getAttribute('aria-label');
-                    return el.name && el.value && aria && aria.trim() !== '';
-                })
-                .map(el => ({
-                    name: el.name,
-                    value: el.value,
-                    ariaLabel: el.getAttribute('aria-label')?.trim() || ''
-                }))
-            """
-        )
-        print(results)
-        # Save debug artifacts to help diagnose navigation/DOM differences
-        if debug_artifacts:
-            try:
-                # Ensure artifact directory exists
-                try:
-                    os.makedirs(artifact_dir, exist_ok=True)
-                except Exception:
-                    pass
-                # Post-action screenshot
-                await page.screenshot(path=f"{artifact_dir}/properties_post.png", full_page=True)
-                html = await page.content()
-                snippet = html[:100000]
-                # Always record navigation URLs
-                try:
-                    with open(f"{artifact_dir}/properties_urls.txt", "w", encoding="utf-8") as f:
-                        f.write(f"start_url: {start_url}\n")
-                        f.write(f"resp_url: {resp_url}\n")
-                        f.write(f"pre_url: {pre_url}\n")
-                        f.write(f"post_url: {post_url}\n")
-                except Exception:
-                    pass
-                # Only dump HTML snippet when we didn't find results to reduce noise
-                if len(results) == 0:
-                    with open(f"{artifact_dir}/properties_snippet.html", "w", encoding="utf-8") as f:
-                        f.write(snippet)
-                title = await page.title()
-                log.debug(
-                    "Saved debug artifacts: title=%s pre=%s post=%s urls=%s snippet=%s",
-                    title,
-                    f"{artifact_dir}/properties_pre.png",
-                    f"{artifact_dir}/properties_post.png",
-                    f"{artifact_dir}/properties_urls.txt",
-                    f"{artifact_dir}/properties_snippet.html",
-                )
-            except Exception as e:
-                log.debug("Failed to save debug artifacts: %s", e)
-
-        # Close resources in reverse order
-        await context.close()
-        await browser.close()
-
-    log.debug("Collected %d checkbox filters", len(results))
-    return {
-        "count": len(results),
-        "filters": results[:50],  # return a subset to keep payload small
-        "headless": headless,
+    schema = {
+      "name": "Hotels",
+      "baseSelector": "//div[@data-testid='property-card']",
+      "fields": [
+            {
+              "name":"availability_link",
+              "selector":".//div[@data-testid='availability-cta']/a",
+              "type":"attribute",
+              "attribute":"href"
+            }
+        ]
     }
 
+    config = CrawlerRunConfig(
+        extraction_strategy=JsonXPathExtractionStrategy(schema, verbose=True),
+        wait_for=f"js:{wait_condition}",
+        scan_full_page= True,
+        scroll_delay=2,
+        screenshot=True,
+        pdf=True,
+    )
+
+    async with AsyncWebCrawler(verbose=True, config=browser_cfg) as crawler:
+        result = await crawler.arun(
+            # NOTE: Keeping URL static as requested
+            url='https://www.booking.com/searchresults.html?ss=Cebu&search_selected=true&checkin=2025-11-15&checkout=2025-11-20&group_adults=2&no_rooms=1&group_children=2&nflt=price%3DEUR-150-300-1%3Broomfacility%3D11',
+            config=config,
+        )
+
+        if not result.success:
+            log.warning("Crawl failed: %s", result.error_message)
+            return {
+                "count": 0,
+                "items": [],
+                "source": "crawl4ai",
+                "headless": headless,
+                "error": result.error_message or "crawl_failed",
+            }
+
+        # Save artifacts when available
+        if result.screenshot:
+            try:
+                out_path = os.path.join(artifact_dir, "booking_screenshot.png")
+                with open(out_path, "wb") as f:
+                    f.write(b64decode(result.screenshot))
+                log.debug("Saved screenshot: %s", out_path)
+            except Exception as e:
+                log.debug("Failed saving screenshot: %s", e)
+        if result.pdf:
+            try:
+                out_pdf = os.path.join(artifact_dir, "booking_page.pdf")
+                with open(out_pdf, "wb") as f:
+                    f.write(result.pdf)
+                log.debug("Saved PDF: %s", out_pdf)
+            except Exception as e:
+                log.debug("Failed saving PDF: %s", e)
+
+        # Extract structured items from JSON string
+        items: List[Dict[str, str]] = []
+        try:
+            data = json.loads(result.extracted_content) if result.extracted_content else []
+            if isinstance(data, list):
+                for x in data:
+                    if isinstance(x, dict) and x.get("availability_link"):
+                        items.append({"availability_link": x.get("availability_link")})
+        except Exception as e:
+            log.debug("Failed parsing extracted content: %s", e)
+
+        return {
+            "count": len(items),
+            "items": items,
+            "source": "crawl4ai",
+            "headless": headless,
+        }
 
 def get_properties() -> Dict[str, Any]:
     """Synchronous entrypoint returning structured results."""
-    data = run_async(run_playwright())
-    return data
+    return run_async(run_crawler())
