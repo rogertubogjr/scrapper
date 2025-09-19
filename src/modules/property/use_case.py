@@ -58,13 +58,8 @@ async def run_playwright() -> Dict[str, Any]:
         os.path.join(os.getcwd(), "artifacts"),
     )
 
-    # Stronger URL to reduce redirections dropping the search term
-    search_term = "cebu"
     url = (
-        "https://www.booking.com/searchresults.html?"
-        f"ss={search_term}&ssne={search_term}&ssne_untouched={search_term}"
-        "&checkin=2025-10-10&checkout=2025-10-11&group_adults=2&no_rooms=1&group_children=0"
-        "&lang=en-us&sb=1"
+        "https://www.booking.com/searchresults.html?ss=cebu&search_selected=true&checkin=2025-10-10&checkout=2025-10-11&group_adults=2&no_rooms=1&group_children=0"
     )
 
     # Use context managers to ensure proper tear-down
@@ -83,17 +78,11 @@ async def run_playwright() -> Dict[str, Any]:
             },
         )
 
-        # Light stealth: hide webdriver flag
-        if stealth:
-            await context.add_init_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-            )
-
         page = await context.new_page()
 
         # Record navigation details before any interactions
         start_url = url
-        response = await page.goto(url, wait_until="domcontentloaded", referer="https://www.booking.com/")
+        response = await page.goto(url, wait_until="domcontentloaded")
         pre_url = page.url
         resp_url = response.url if response else None
         try:
@@ -120,53 +109,6 @@ async def run_playwright() -> Dict[str, Any]:
             await page.wait_for_load_state("networkidle", timeout=10000)
         except Exception:
             pass
-
-        # Try to accept cookie banners if present
-        async def try_accept_cookies() -> None:
-            try:
-                sel = (
-                    "#onetrust-accept-btn-handler, "
-                    "button:has-text('Accept all'), "
-                    "button:has-text('Accept'), "
-                    "button:has-text('I agree'), "
-                    "button[aria-label*='Accept']"
-                )
-                btn = page.locator(sel).first
-                # Use locator() API's first() method
-                btn = page.locator(sel).first
-                if await btn.count() > 0:
-                    await btn.click(timeout=3000)
-            except Exception:
-                # Non-fatal; proceed
-                pass
-
-        await try_accept_cookies()
-
-        # If redirected away from search results, attempt a UI search fallback
-        if "searchresults" not in page.url:
-            try:
-                search_input = page.locator('input[name="ss"]').first
-                await search_input.wait_for(state="visible", timeout=8000)
-                await search_input.fill(search_term)
-                await page.keyboard.press("Enter")
-                await page.wait_for_url("**/searchresults.html**", timeout=15000)
-            except Exception as e:
-                log.warning("Fallback UI search failed: %s", e)
-
-        # Optional: print page content (truncated) for debugging
-        if debug_print:
-            try:
-                title = await page.title()
-                html = await page.content()
-                snippet = html if len(html) <= debug_print_max else html[:debug_print_max]
-                log.warning(
-                    "DEBUG_PRINT: title=%s html_length=%d snippet=\n%s",
-                    title,
-                    len(html),
-                    snippet,
-                )
-            except Exception as e:
-                log.warning("DEBUG_PRINT failed: %s", e)
 
         # Prefer specific filters container; fallback to any checkbox
         try:
@@ -198,6 +140,7 @@ async def run_playwright() -> Dict[str, Any]:
                 }))
             """
         )
+        print(results)
         # Save debug artifacts to help diagnose navigation/DOM differences
         if debug_artifacts:
             try:
