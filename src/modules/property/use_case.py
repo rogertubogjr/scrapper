@@ -45,7 +45,12 @@ async def run_playwright() -> Dict[str, Any]:
 
     stealth = _get_bool("PLAYWRIGHT_STEALTH", True)
     debug_artifacts = _get_bool("PLAYWRIGHT_DEBUG_ARTIFACTS", False)
-    artifact_dir = os.getenv("PLAYWRIGHT_ARTIFACT_DIR", "/tmp")
+    # Default to a repo-local artifacts directory so files are easy to find.
+    # Override via PLAYWRIGHT_ARTIFACT_DIR when needed (e.g., container copy or bind mount).
+    artifact_dir = os.getenv(
+        "PLAYWRIGHT_ARTIFACT_DIR",
+        os.path.join(os.getcwd(), "artifacts"),
+    )
 
     url = (
         "https://www.booking.com/searchresults.html?ss=cebu&search_selected=true&"
