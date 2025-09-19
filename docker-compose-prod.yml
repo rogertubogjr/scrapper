@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   api:
-    image: s3-backend:latest
+    image: scrapper-backend:latest
     container_name: scrapper-api-prod
     ports:
       - '5001:5001'
