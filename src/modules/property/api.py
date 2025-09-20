@@ -10,21 +10,6 @@ from src.middlewares.api_auth_token import requires
 
 
 class Properties(Resource):
-    # @requires([UserType.ADMIN.value])
-    def get(self):
-        # Accept any query parameters. If there is exactly one param, use its
-        # value directly; otherwise stringify the whole query dict.
-        args = request.args.to_dict(flat=True)
-        if not args:
-            raise InvalidDataError("Supply query parameters or use POST with a body.")
-        if len(args) == 1:
-            prompt = next(iter(args.values()))
-        else:
-            prompt = json.dumps(args, ensure_ascii=False)
-        if not isinstance(prompt, str) or not prompt.strip():
-            raise InvalidDataError("Request input must be a non-empty string or JSON.")
-        return get_properties(prompt.strip())
-
     def post(self):
         """Accept arbitrary text, JSON, or form data and pass it as a string.
 
