@@ -10,6 +10,7 @@ from crawl4ai import (
 from agents import Runner
 from datetime import date, timedelta
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 
 from flask import current_app
 from playwright.async_api import async_playwright
@@ -18,7 +19,13 @@ from src.agent_helpers.booking_search_url_agent import booking_search_url_agent
 from src.handler.error_handler import InvalidDataError, NotFoundError, UnexpectedError
 
 log = logging.getLogger(__name__)
-
+headers = {
+  "User-Agent": (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+  )
+}
 
 def run_async(coro):
   """Run async coroutine from sync context safely."""
@@ -41,9 +48,9 @@ def _get_bool(name: str, default: bool) -> bool:
 
 async def run_crawler(url) -> Dict[str, Any]:
   headless = _get_bool("PLAYWRIGHT_HEADLESS", True)
-  artifact_dir = os.getenv("PLAYWRIGHT_ARTIFACT_DIR", os.path.join(os.getcwd(), "artifacts"))
+  sitemap_dir = os.getenv("SITEMAP_DIR", os.path.join(os.getcwd(), "artifacts"))
   try:
-    os.makedirs(artifact_dir, exist_ok=True)
+    os.makedirs(sitemap_dir, exist_ok=True)
   except Exception:
     pass
 
@@ -67,11 +74,7 @@ async def run_crawler(url) -> Dict[str, Any]:
 
   config = CrawlerRunConfig(
     extraction_strategy=JsonXPathExtractionStrategy(schema, verbose=True),
-    wait_for=f"js:{wait_condition}",
-    scan_full_page=True,
-    scroll_delay=1.2,
-    screenshot=True,
-    pdf=True,
+    wait_for=f"js:{wait_condition}"
   )
 
   async with AsyncWebCrawler(verbose=True, config=browser_cfg) as crawler:
@@ -79,16 +82,6 @@ async def run_crawler(url) -> Dict[str, Any]:
       url=url,
       config=config,
     )
-    if result.screenshot:
-      print(f"[OK] Screenshot captured, size: {len(result.screenshot)} bytes")
-      with open("wikipedia_screenshot.png", "wb") as f:
-        f.write(b64decode(result.screenshot))
-    else:
-      print("[WARN] Screenshot data is None.")
-    if result.pdf:
-      print(f"[OK] PDF captured, size: {len(result.pdf)} bytes")
-      with open("wikipedia_page.pdf", "wb") as f:
-        f.write(result.pdf)
 
     if not result.success:
       log.warning("Crawl failed: %s", result.error_message)
@@ -126,6 +119,191 @@ async def run_crawler(url) -> Dict[str, Any]:
       "headless": headless,
     }
 
+
+def get_hotel_sitemap_url():
+  url = "https://www.booking.com/robots.txt"
+
+  try:
+    resp = requests.get(url, timeout=15, headers=headers)
+    resp.raise_for_status()
+  except requests.RequestException as e:
+    log.warning("robots fetch failed: %s", e)
+    return []
+
+  sitemap_urls = re.findall(r"^Sitemap:\s*(\S+)$", resp.text, re.MULTILINE | re.IGNORECASE)
+
+  # Prefer NL hotel sitemap index if present
+  index_url = None
+  for url in sitemap_urls:
+    if "sitembk-hotel-nl" in url and "index" in url:
+      index_url = url
+      break
+  if not index_url:
+    for url in sitemap_urls:
+      if "sitembk-hotel" in url and "index" in url:
+        index_url = url
+        break
+
+  return index_url
+
+def get_en_us_hotel_xml(url):
+  resp = requests.get(url, timeout=20, headers=headers)
+  resp.raise_for_status()
+  content = resp.content
+  if url.endswith(".gz") or "gzip" in resp.headers.get("Content-Type", "").lower():
+    try:
+      content = gzip.decompress(content)
+    except OSError:
+      pass
+
+  try:
+    root = ET.fromstring(content)
+  except ET.ParseError as e:
+    log.warning("sitemap XML parse failed: %s", e)
+    return []
+
+  ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+  out: List[Dict[str, str]] = []
+  for node in root.findall("sm:sitemap", ns):
+    loc_el = node.find("sm:loc", ns)
+    lastmod_el = node.find("sm:lastmod", ns)
+    if 'en-us' not in loc_el.text.strip() or loc_el is None or not (loc_el.text or "").strip():
+      continue
+    out.append({
+      "loc": loc_el.text.strip(),
+      "lastmod": (lastmod_el.text.strip() if (lastmod_el is not None and lastmod_el.text) else None),
+    })
+
+  return out
+
+def thread_download_and_save_xml_gz(params):
+  url = params['loc']
+  filename = url.split('/')[3].replace('.gz','')
+  # Download the gzip sitemap and save decompressed XML to /tmp
+  try:
+    resp = requests.get(url, timeout=30, headers=headers)
+    resp.raise_for_status()
+    gz_bytes = resp.content
+  except requests.RequestException as e:
+    log.warning("gz sitemap fetch failed: %s", e)
+    return None
+
+  # Decompress .gz → XML bytes (fallback if server sends plain XML)
+  try:
+    xml_bytes = gzip.decompress(gz_bytes)
+  except OSError:
+    xml_bytes = gz_bytes
+
+  # Persist for inspection under artifacts directory
+  sitemap_dir = os.getenv("SITEMAP_DIR", os.path.join(os.getcwd(), "/app/sitemap_data"))
+  try:
+    os.makedirs(sitemap_dir, exist_ok=True)
+  except Exception:
+    pass
+  out_path = os.path.join(sitemap_dir, filename)
+  try:
+    with open(out_path, "wb") as f:
+      f.write(xml_bytes)
+    log.info("Saved sitemap XML: %s (%d bytes)", out_path, len(xml_bytes))
+  except Exception as e:
+    log.debug("Failed saving sitemap XML: %s", e)
+
+  return filename
+
+def threadWorker(params):
+  # print(params)
+  sitemap_dir = os.getenv("SITEMAP_DIR", os.path.join(os.getcwd(), "/app/sitemap_data"))
+
+  export_sitemap_urls_to_ndjson(f"{sitemap_dir}/{params}")
+  return params
+
 def get_location():
-  crawl = run_async(run_crawler('https://www.booking.com/hotel/ad/abbasuitehotelandorra.html'))
-  print(crawl,'-----------')
+
+  url = get_hotel_sitemap_url()
+  xml_gz_urls = get_en_us_hotel_xml(url)
+
+  with ThreadPoolExecutor(max_workers=int(os.getenv('NO_OF_WORKER_THREAD'))) as executor:
+    xml_filenames = list(executor.map(thread_download_and_save_xml_gz, xml_gz_urls[0:1]))
+
+  # for xml_gz_url in xml_gz_urls:
+  #   filename = download_and_save_xml_gz(xml_gz_url['loc'])
+  #   if filename:
+  #     xml_filenames.append(dict(filename = filename))
+  #     break
+
+  # for i in xml_filenames:
+  #   print(i)
+
+  with ThreadPoolExecutor(max_workers=int(os.getenv('NO_OF_WORKER_THREAD'))) as executor:
+    getUshersReportResult = list(executor.map(threadWorker, xml_filenames))
+
+  for i in getUshersReportResult:
+    print(i)
+
+  print(int(os.getenv('NO_OF_WORKER_THREAD')))
+
+def _strip_ns(tag: str) -> str:
+  """Strip XML namespace from a tag name."""
+  return tag.rsplit('}', 1)[-1] if '}' in tag else tag
+
+
+def iter_sitemap_urls(xml_path: str) -> Iterator[Dict[str, str]]:
+  """Stream-parse a sitemap XML (or .gz) yielding dicts with loc/lastmod/changefreq.
+
+  Uses ElementTree.iterparse for O(1) memory regardless of file size.
+  """
+  # Open as gzip if needed
+  opener = gzip.open if xml_path.endswith('.gz') else open
+  with opener(xml_path, 'rb') as fh:
+    context = ET.iterparse(fh, events=("end",))
+    # prime the iterator and store root to help free memory
+    try:
+      _, root = next(context)
+    except StopIteration:
+      return
+
+    for event, elem in context:
+      if _strip_ns(elem.tag) != 'url':
+        continue
+
+      rec: Dict[str, str] = {}
+      for child in list(elem):
+        key = _strip_ns(child.tag)
+        if key in ("loc", "lastmod", "changefreq") and child.text:
+          rec[key] = child.text.strip()
+
+      if rec.get("loc"):
+        yield rec
+
+      # free element memory as we go
+      elem.clear()
+      # also clear root periodically to release processed nodes
+      if len(root) > 1000:
+        root.clear()
+
+
+def export_sitemap_urls_to_ndjson(xml_path: str, out_path: Optional[str] = None) -> str:
+  """Export sitemap entries to NDJSON under artifacts and return the path.
+
+  - Writes one JSON object per line: {loc, lastmod, changefreq}
+  - Creates the artifacts directory if needed.
+  """
+  sitemap_dir = os.getenv("SITEMAP_DIR", os.path.join(os.getcwd(), "artifacts"))
+  try:
+    os.makedirs(sitemap_dir, exist_ok=True)
+  except Exception:
+    pass
+
+  if out_path is None:
+    base = os.path.splitext(os.path.basename(xml_path))[0]
+    out_path = os.path.join(sitemap_dir, f"{base}.ndjson")
+
+  count = 0
+  with open(out_path, 'w', encoding='utf-8') as out_f:
+    for rec in iter_sitemap_urls(xml_path):
+      out_f.write(json.dumps(rec, ensure_ascii=False))
+      out_f.write("\n")
+      count += 1
+
+  log.info("Exported %d sitemap entries to %s", count, out_path)
+  return out_path

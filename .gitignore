@@ -218,3 +218,5 @@ artifacts/
 *.zip
 *.mp4
 *.gif
+*.ndjson
+*.xml
