@@ -22,3 +22,24 @@ services:
       options:
         max-size: '10m'
         max-file: '3'
+
+  scheduler:
+    image: scrapper-backend:latest
+    container_name: scrapper-scheduler-prod
+    command: ['python', 'run_scheduler.py']
+    env_file:
+      - .env
+    environment:
+      - DEBUG=false
+      - PLAYWRIGHT_HEADLESS=true
+      # Default: hourly
+      - CRON_POPULAR=* 1 * * *
+    volumes:
+      - ./artifacts:/app/artifacts
+    restart: unless-stopped
+    shm_size: '1gb'
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'

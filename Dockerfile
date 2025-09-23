@@ -7,10 +7,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Install minimal build tools for packages needing compilation (e.g., madoka)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       build-essential \
+       python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install Python dependencies first (better layer caching)
 COPY requirements.txt /app/requirements.txt
-RUN pip install --upgrade pip \
-    && pip install -r /app/requirements.txt
+RUN pip install -r /app/requirements.txt
 
 # Copy the rest of the application
 COPY . /app

@@ -1,11 +1,11 @@
-version: "3.8"
+version: '3.8'
 
 services:
   api:
     build: .
     container_name: scrapper-api
     ports:
-      - "5001:5001"
+      - '5001:5001'
     # Mount code for live development edits (no reloader is configured by default)
     volumes:
       - ./:/app
@@ -16,6 +16,21 @@ services:
       - DEBUG=true
       - PLAYWRIGHT_HEADLESS=true
     # Increase shared memory to reduce Chromium crashes
-    shm_size: "1gb"
+    shm_size: '1gb'
     # If you later add a DB, add depends_on here
 
+  scheduler:
+    build: .
+    container_name: scrapper-scheduler
+    command: ['python', 'run_scheduler.py']
+    env_file:
+      - .env
+    environment:
+      - DEBUG=false
+      - PLAYWRIGHT_HEADLESS=true
+      # Cron expression for the sample job (default: hourly)
+      - CRON_POPULAR=1 * * * *
+    volumes:
+      - ./:/app
+      - ./artifacts:/app/artifacts
+    shm_size: '1gb'

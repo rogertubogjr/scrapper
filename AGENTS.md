@@ -38,6 +38,16 @@ Docker & VPS (Ubuntu) Compatibility
   - Expose port `5001` or run behind a reverse proxy (e.g., Nginx). Do not run privileged containers.
 - Non-Docker local dev remains supported (venv + `playwright install`) but Docker is recommended for parity with VPS.
 
+Scheduler (Cron-like Jobs)
+
+- Module: APScheduler (added). A separate scheduler process runs jobs that can reuse use-cases.
+- Entrypoint: `run_scheduler.py` (starts APScheduler with AsyncIO).
+- Jobs live in: `src/scheduler/jobs.py` (example: `crawl_popular`).
+- Configure schedule via env: `CRON_POPULAR` (crontab, default hourly `0 * * * *`).
+- Docker dev: a `scheduler` service is added to `docker-compose.yml`.
+- Docker prod: a `scheduler` service is added to `docker-compose-prod.yml` with restart + logging.
+- Notes: jobs may enter the Flask app context if needed; keep `PLAYWRIGHT_HEADLESS=true` and `shm_size: 1gb`.
+
 Local Run
 
 - Create and activate a venv, then install deps:
@@ -52,7 +62,7 @@ Local Run
 - Primary endpoint (agent + crawl):
   - `POST http://localhost:5001/properties`
     - Body: JSON, form data, or raw text (any JSON shape is stringified)
-    - Response (example): `{ "destination": "Cebu", "count": 12, "items": [{"availability_link": "..."}], "source": "crawl4ai" }`
+    - Response (example): `{ "destination": "SampleCity", "count": 12, "items": [{"availability_link": "..."}], "source": "crawl4ai" }`
 
 Configuration & Secrets
 
