@@ -4,7 +4,7 @@ from flask import request
 import json, re, requests
 
 from .use_case import get_properties, test
-from .tmp_use_case import export_sitemap_ndjson
+from .tmp_use_case import get_location
 
 # middleare
 from src.middlewares.api_auth_token import requires
@@ -12,7 +12,7 @@ from src.middlewares.api_auth_token import requires
 
 class Properties(Resource):
   def get(self):
-    export_sitemap_ndjson()
+    get_location()
 
   def post(self):
       """Accept arbitrary text, JSON, or form data and pass it as a string.
