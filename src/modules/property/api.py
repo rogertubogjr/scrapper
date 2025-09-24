@@ -9,6 +9,9 @@ from .tmp_use_case import export_sitemap_ndjson
 # middleare
 from src.middlewares.api_auth_token import requires
 
+# models
+from src.db.models.hotel_listing import HotelListing
+
 
 class Properties(Resource):
   def get(self):

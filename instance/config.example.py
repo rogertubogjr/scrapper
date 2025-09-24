@@ -36,3 +36,4 @@ PLAYWRIGHT_ARGS = [
     "--disable-setuid-sandbox",
 ]
 
+SQLALCHEMY_DATABASE_URI = "postgresql://postgres:password@db/db"

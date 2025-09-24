@@ -32,3 +32,26 @@ services:
       - ./:/app
       - ./artifacts:/app/artifacts
     shm_size: '1gb'
+
+  db:
+    image: postgres:17.6-alpine
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_DB_PASSWORD}
+      POSTGRES_DB: db
+      TZ: 'Asia/Manila'
+    volumes:
+      - postgres17-data:/var/lib/postgresql/data
+    shm_size: 1gb
+
+  adminer:
+    image: adminer:latest
+    restart: always
+    ports:
+      - '127.0.0.1:8888:8080'
+    environment:
+      ADMINER_PLUGINS: 'tables-filter tinymce'
+      ADMINER_DESIGN: 'price'
+
+volumes:
+  postgres17-data:

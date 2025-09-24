@@ -2,9 +2,13 @@ from flask import Flask, got_request_exception
 from flask_restful import Api
 from flask_cors import CORS
 import logging, sys
+from flask_sqlalchemy import SQLAlchemy
+from flask_migrate import Migrate
 
 app = Flask('rtg', instance_relative_config=True)
 app.config.from_pyfile('config.py')
+db = SQLAlchemy(app)
+migrate = Migrate(app, db)
 api = Api(app)
 
 if app.config['DEBUG']:
