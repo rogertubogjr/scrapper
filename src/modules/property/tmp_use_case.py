@@ -18,6 +18,7 @@ from playwright.async_api import async_playwright
 from src.agent_helpers.destination_extractor import ah_destination_extractor
 from src.agent_helpers.booking_search_url_agent import booking_search_url_agent
 from src.handler.error_handler import InvalidDataError, NotFoundError, UnexpectedError
+from src.db.models.hotel_listing import HotelListing
 
 log = logging.getLogger(__name__)
 HTTP_HEADERS = {
@@ -253,8 +254,40 @@ def export_sitemap_ndjson():
         if group_limit_counter == 2:
           break
 
-    for i in urls_to_scrape_groups:
-      print(i)
+    # Filter out URLs that already exist in the DB
+    filtered_groups: List[List[str]] = []
+    for grp_urls in urls_to_scrape_groups:
+      existing = set(
+        url for (url,) in (
+          HotelListing.query
+          .with_entities(HotelListing.hotel_url)
+          .filter(HotelListing.hotel_url.in_(grp_urls))
+          .all()
+        )
+      )
+      new_urls = [u for u in grp_urls if u not in existing]
+      if new_urls:
+        filtered_groups.append(new_urls)
+
+      crawled_data = run_async(run_crawler(new_urls))
+      if not crawled_data:
+        continue
+
+      rows = []
+      for item in crawled_data:
+        url_val = item.get('url')
+        loc_val = item.get('location')
+        if not url_val:
+          continue
+        rows.append({
+          'hotel_url': url_val,
+          'location': loc_val,
+          'lastmod': date.today(),
+          'origin': 'booking.com',
+        })
+
+      if rows:
+        HotelListing.bulk_upsert(rows, update_on_conflict=True)
 
     break
 

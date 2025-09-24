@@ -15,7 +15,8 @@ services:
       - PLAYWRIGHT_HEADLESS=true
     # Increase shared memory to reduce Chromium crashes
     shm_size: '1gb'
-    # If you later add a DB, add depends_on here
+    depends_on:
+      - db
 
   scheduler:
     build: .
