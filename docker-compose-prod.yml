@@ -6,9 +6,6 @@ services:
       - '127.0.0.1:5001:5001'
     env_file:
       - .env
-    environment:
-      - DEBUG=false
-      - PLAYWRIGHT_HEADLESS=true
     volumes:
       # Persist scraper artifacts from container to host
       - ./artifacts:/app/artifacts
@@ -27,13 +24,9 @@ services:
     command: ['python', 'run_scheduler.py']
     env_file:
       - .env
-    environment:
-      - DEBUG=false
-      - PLAYWRIGHT_HEADLESS=true
-      # Default: hourly
-      - CRON_POPULAR=* 1 * * *
     volumes:
       - ./artifacts:/app/artifacts
+      - ./sitemap_data:/app/sitemap_data
     restart: unless-stopped
     shm_size: '1gb'
     logging:
@@ -41,3 +34,26 @@ services:
       options:
         max-size: '10m'
         max-file: '3'
+
+  db:
+    image: postgres:17.6-alpine
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_DB_PASSWORD}
+      POSTGRES_DB: db
+      TZ: 'Asia/Manila'
+    volumes:
+      - postgres17-data:/var/lib/postgresql/data
+    shm_size: 1gb
+
+  adminer:
+    image: adminer:latest
+    restart: always
+    ports:
+      - '127.0.0.1:8888:8080'
+    environment:
+      ADMINER_PLUGINS: 'tables-filter tinymce'
+      ADMINER_DESIGN: 'price'
+
+volumes:
+  postgres17-data:

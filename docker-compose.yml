@@ -9,10 +9,6 @@ services:
       - ./:/app
     env_file:
       - .env
-    environment:
-      # Safe defaults for development
-      - DEBUG=true
-      - PLAYWRIGHT_HEADLESS=true
     # Increase shared memory to reduce Chromium crashes
     shm_size: '1gb'
     depends_on:
@@ -24,11 +20,6 @@ services:
     command: ['python', 'run_scheduler.py']
     env_file:
       - .env
-    environment:
-      - DEBUG=false
-      - PLAYWRIGHT_HEADLESS=true
-      # Cron expression for the sample job (default: hourly)
-      - CRON_POPULAR=1 * * * *
     volumes:
       - ./:/app
       - ./artifacts:/app/artifacts
