@@ -3,7 +3,7 @@ from flask_restful import Api
 from flask_cors import CORS
 import logging, sys
 
-app = Flask('sfms', instance_relative_config=True)
+app = Flask('rtg', instance_relative_config=True)
 app.config.from_pyfile('config.py')
 api = Api(app)
 

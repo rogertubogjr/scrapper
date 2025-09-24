@@ -6,6 +6,7 @@ from crawl4ai import (
   BrowserConfig,
   CrawlerRunConfig,
   JsonXPathExtractionStrategy,
+  MemoryAdaptiveDispatcher,
 )
 from agents import Runner
 from datetime import date, timedelta
@@ -19,7 +20,7 @@ from src.agent_helpers.booking_search_url_agent import booking_search_url_agent
 from src.handler.error_handler import InvalidDataError, NotFoundError, UnexpectedError
 
 log = logging.getLogger(__name__)
-headers = {
+HTTP_HEADERS = {
   "User-Agent": (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -46,17 +47,12 @@ def _get_bool(name: str, default: bool) -> bool:
     return default
   return str(v).strip().lower() in {"1", "true", "yes", "on"}
 
-async def run_crawler(url) -> Dict[str, Any]:
+async def run_crawler(urls) -> Dict[str, Any]:
   headless = _get_bool("PLAYWRIGHT_HEADLESS", True)
-  sitemap_dir = os.getenv("SITEMAP_DIR", os.path.join(os.getcwd(), "artifacts"))
-  try:
-    os.makedirs(sitemap_dir, exist_ok=True)
-  except Exception:
-    pass
 
   browser_cfg = BrowserConfig(headless=headless)
   wait_condition = """() => {
-        const items = document.querySelectorAll('[data-testid=\"PropertyHeaderAddressDesktop-wrapper\"]');
+        const items = document.querySelectorAll('[data-testid=\"PropertyHeaderAddressDesktop-wrapper\"] button div');
         return items.length > 0;
     }"""
 
@@ -74,57 +70,47 @@ async def run_crawler(url) -> Dict[str, Any]:
 
   config = CrawlerRunConfig(
     extraction_strategy=JsonXPathExtractionStrategy(schema, verbose=True),
-    wait_for=f"js:{wait_condition}"
+    wait_for=f"js:{wait_condition}",
+    scan_full_page=True
+  )
+  dispatcher = MemoryAdaptiveDispatcher(
+      memory_threshold_percent=70.0,
+      max_session_permit=10
   )
 
   async with AsyncWebCrawler(verbose=True, config=browser_cfg) as crawler:
-    result = await crawler.arun(
-      url=url,
+    results = await crawler.arun_many(
+      urls=urls,
       config=config,
+      dispatcher=dispatcher
     )
 
-    if not result.success:
-      log.warning("Crawl failed: %s", result.error_message)
-      return {
-        "count": 0,
-        "items": [],
-        "source": "crawl4ai",
-        "headless": headless,
-        "error": result.error_message or "crawl_failed",
-      }
+    # if not result.success:
+    #   log.warning("Crawl failed: %s", result.error_message)
 
-    items: List[Dict[str, str]] = []
-    print(result.extracted_content)
-    try:
-      raw = result.extracted_content or "[]"
-      data = json.loads(raw)
-      if isinstance(data, list):
-        for x in data:
-          if not isinstance(x, dict):
-            continue
-          itm: Dict[str, str] = {}
-          location = x.get("location")
+    url_and_locations = []
 
-          if isinstance(location, str) and location.strip():
-            itm["location"] = location.strip()
-          if itm:
-            items.append(itm)
-    except Exception as e:
-      log.debug("Failed parsing extracted content: %s", e)
+    for res in results:
+      if res.success and len(res.extracted_content):
 
-    return {
-      "count": len(items),
-      "items": items,
-      "source": "crawl4ai",
-      "headless": headless,
-    }
+        raw = res.extracted_content or "[]"
+        data = json.loads(raw)
+        if isinstance(data, list):
+          for x in data:
+            if isinstance(x, dict):
+              location = x.get("location").split('After booking')[0].split('Excellent location')[0]
+              url_and_locations.append(dict(location = location, url = res.url))
+      else:
+        print("Failed:", res.url, "-", res.error_message)
+
+    return url_and_locations
 
 
 def get_hotel_sitemap_url():
   url = "https://www.booking.com/robots.txt"
 
   try:
-    resp = requests.get(url, timeout=15, headers=headers)
+    resp = requests.get(url, timeout=15, headers=HTTP_HEADERS)
     resp.raise_for_status()
   except requests.RequestException as e:
     log.warning("robots fetch failed: %s", e)
@@ -134,23 +120,23 @@ def get_hotel_sitemap_url():
 
   # Prefer NL hotel sitemap index if present
   index_url = None
-  for url in sitemap_urls:
-    if "sitembk-hotel-nl" in url and "index" in url:
-      index_url = url
+  for sm_url in sitemap_urls:
+    if "sitembk-hotel-nl" in sm_url and "index" in sm_url:
+      index_url = sm_url
       break
   if not index_url:
-    for url in sitemap_urls:
-      if "sitembk-hotel" in url and "index" in url:
-        index_url = url
+    for sm_url in sitemap_urls:
+      if "sitembk-hotel" in sm_url and "index" in sm_url:
+        index_url = sm_url
         break
 
   return index_url
 
-def get_en_us_hotel_xml(url):
-  resp = requests.get(url, timeout=20, headers=headers)
+def get_en_us_hotel_xml(index_url):
+  resp = requests.get(index_url, timeout=20, headers=HTTP_HEADERS)
   resp.raise_for_status()
   content = resp.content
-  if url.endswith(".gz") or "gzip" in resp.headers.get("Content-Type", "").lower():
+  if index_url.endswith(".gz") or "gzip" in resp.headers.get("Content-Type", "").lower():
     try:
       content = gzip.decompress(content)
     except OSError:
@@ -181,7 +167,7 @@ def thread_download_and_save_xml_gz(params):
   filename = url.split('/')[3].replace('.gz','')
   # Download the gzip sitemap and save decompressed XML to /tmp
   try:
-    resp = requests.get(url, timeout=30, headers=headers)
+    resp = requests.get(url, timeout=30, headers=HTTP_HEADERS)
     resp.raise_for_status()
     gz_bytes = resp.content
   except requests.RequestException as e:
@@ -197,10 +183,10 @@ def thread_download_and_save_xml_gz(params):
   # Persist for inspection under artifacts directory
   sitemap_dir = os.getenv("SITEMAP_DIR", os.path.join(os.getcwd(), "/app/sitemap_data"))
   try:
-    os.makedirs(sitemap_dir, exist_ok=True)
+    os.makedirs(f"{sitemap_dir}/xml", exist_ok=True)
   except Exception:
     pass
-  out_path = os.path.join(sitemap_dir, filename)
+  out_path = os.path.join(f"{sitemap_dir}/xml", filename)
   try:
     with open(out_path, "wb") as f:
       f.write(xml_bytes)
@@ -210,37 +196,69 @@ def thread_download_and_save_xml_gz(params):
 
   return filename
 
-def threadWorker(params):
-  # print(params)
+def thread_worker(param_filename):
+  sitemap_dir = os.getenv("SITEMAP_DIR", os.path.join(os.getcwd(), "/app/sitemap_data"))
+  export_sitemap_urls_to_ndjson(f"{sitemap_dir}/xml/{param_filename}")
+  return param_filename
+
+def export_sitemap_ndjson():
   sitemap_dir = os.getenv("SITEMAP_DIR", os.path.join(os.getcwd(), "/app/sitemap_data"))
 
-  export_sitemap_urls_to_ndjson(f"{sitemap_dir}/{params}")
-  return params
+  sitemap_index_url = get_hotel_sitemap_url()
+  en_us_sitemap_entries = get_en_us_hotel_xml(sitemap_index_url)
 
-def get_location():
+  with ThreadPoolExecutor(max_workers=int(os.getenv('SITEMAP_WORKER_THREADS'))) as executor:
+    sitemap_xml_filenames = list(executor.map(thread_download_and_save_xml_gz, en_us_sitemap_entries[0:1]))
 
-  url = get_hotel_sitemap_url()
-  xml_gz_urls = get_en_us_hotel_xml(url)
+  with ThreadPoolExecutor(max_workers=int(os.getenv('SITEMAP_WORKER_THREADS'))) as executor:
+    list(executor.map(thread_worker, sitemap_xml_filenames))
 
-  with ThreadPoolExecutor(max_workers=int(os.getenv('NO_OF_WORKER_THREAD'))) as executor:
-    xml_filenames = list(executor.map(thread_download_and_save_xml_gz, xml_gz_urls[0:1]))
+  # crawl = run_async(run_crawler(urls_to_scrape))
 
-  # for xml_gz_url in xml_gz_urls:
-  #   filename = download_and_save_xml_gz(xml_gz_url['loc'])
-  #   if filename:
-  #     xml_filenames.append(dict(filename = filename))
-  #     break
+  # List and sort all NDJSON files under sitemap_data/ndjson
+  ndjson_dir = os.path.join(sitemap_dir, "ndjson")
+  try:
+    ndjson_files = [
+      os.path.join(ndjson_dir, name)
+      for name in os.listdir(ndjson_dir)
+      if name.endswith('.ndjson')
+    ]
+  except FileNotFoundError:
+    ndjson_files = []
 
-  # for i in xml_filenames:
-  #   print(i)
+  # Sort by filename (ascending)
+  ndjson_files_by_name = sorted(ndjson_files)
 
-  with ThreadPoolExecutor(max_workers=int(os.getenv('NO_OF_WORKER_THREAD'))) as executor:
-    getUshersReportResult = list(executor.map(threadWorker, xml_filenames))
+  for file_path in ndjson_files_by_name:
 
-  for i in getUshersReportResult:
-    print(i)
+    urls_to_scrape_groups = []
+    group_limit_counter = 0
 
-  print(int(os.getenv('NO_OF_WORKER_THREAD')))
+    with open(file_path, encoding="utf-8") as f:
+      group_counter = 0
+      urls_to_scrape = []
+
+      for line in f:
+        group_counter += 1
+        if not line.strip():
+          continue
+        rec = json.loads(line)
+        urls_to_scrape.append(rec["loc"])
+        if group_counter == int(os.getenv('PARALLEL_URL_TO_SCRAPE')):
+          urls_to_scrape_groups.append(urls_to_scrape)
+          group_counter = 0
+          urls_to_scrape = []
+          group_limit_counter += 1
+
+        if group_limit_counter == 2:
+          break
+
+    for i in urls_to_scrape_groups:
+      print(i)
+
+    break
+
+
 
 def _strip_ns(tag: str) -> str:
   """Strip XML namespace from a tag name."""
@@ -288,15 +306,15 @@ def export_sitemap_urls_to_ndjson(xml_path: str, out_path: Optional[str] = None)
   - Writes one JSON object per line: {loc, lastmod, changefreq}
   - Creates the artifacts directory if needed.
   """
-  sitemap_dir = os.getenv("SITEMAP_DIR", os.path.join(os.getcwd(), "artifacts"))
+  sitemap_dir = os.getenv("SITEMAP_DIR", os.path.join(os.getcwd(), "artifacts")) + '/ndjson'
   try:
-    os.makedirs(sitemap_dir, exist_ok=True)
+    os.makedirs(f"{sitemap_dir}", exist_ok=True)
   except Exception:
     pass
 
   if out_path is None:
     base = os.path.splitext(os.path.basename(xml_path))[0]
-    out_path = os.path.join(sitemap_dir, f"{base}.ndjson")
+    out_path = os.path.join(f"{sitemap_dir}", f"{base}.ndjson")
 
   count = 0
   with open(out_path, 'w', encoding='utf-8') as out_f:
