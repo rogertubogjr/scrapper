@@ -4,12 +4,16 @@ from flask import request
 import json, re, requests
 
 from .use_case import get_properties
+from src.scheduler.booking_sitemap.service import export_sitemap_ndjson
 
 # middleare
 from src.middlewares.api_auth_token import requires
 
 
 class Properties(Resource):
+  def get(self):
+      export_sitemap_ndjson()
+
   def post(self):
       """Accept arbitrary text, JSON, or form data and pass it as a string.
 

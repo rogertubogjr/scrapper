@@ -132,6 +132,7 @@ def export_sitemap_ndjson() -> None:
     log.debug("Using sitemap directory %s", base_dir)
 
     index_url = sources.get_hotel_sitemap_index()
+    print('🚀 ~ index_url:', index_url)
     if not index_url:
         log.warning("No hotel sitemap index found")
         return
