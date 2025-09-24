@@ -42,8 +42,10 @@ Scheduler (Cron-like Jobs)
 
 - Module: APScheduler (added). A separate scheduler process runs jobs that can reuse use-cases.
 - Entrypoint: `run_scheduler.py` (starts APScheduler with AsyncIO).
-- Jobs live in: `src/scheduler/jobs.py` (example: `crawl_popular`).
+- Jobs live in: `src/scheduler/jobs.py` (examples: `crawl_popular`, `ingest_booking_sitemaps`).
+- Scheduler runs in UTC; set cron expressions accordingly.
 - Configure schedule via env: `CRON_POPULAR` (crontab, default hourly `0 * * * *`).
+- Booking sitemap ingest schedule via env: `CRON_BOOKING_SITEMAP` (crontab, default hourly `0 * * * *`).
 - Docker dev: a `scheduler` service is added to `docker-compose.yml`.
 - Docker prod: a `scheduler` service is added to `docker-compose-prod.yml` with restart + logging.
 - Notes: jobs may enter the Flask app context if needed; keep `PLAYWRIGHT_HEADLESS=true` and `shm_size: 1gb`.

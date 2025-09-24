@@ -173,7 +173,7 @@ def thread_download_and_save_xml_gz(params):
     gz_bytes = resp.content
   except requests.RequestException as e:
     log.warning("gz sitemap fetch failed: %s", e)
-    return None
+    raise ValueError('gz sitemap fetch failed')
 
   # Decompress .gz → XML bytes (fallback if server sends plain XML)
   try:
@@ -257,14 +257,17 @@ def export_sitemap_ndjson():
     # Filter out URLs that already exist in the DB
     filtered_groups: List[List[str]] = []
     for grp_urls in urls_to_scrape_groups:
-      existing = set(
+      existing = {
         url for (url,) in (
           HotelListing.query
           .with_entities(HotelListing.hotel_url)
-          .filter(HotelListing.hotel_url.in_(grp_urls))
+          .filter(
+            HotelListing.hotel_url.in_(grp_urls),
+            HotelListing.origin == 'booking.com',
+          )
           .all()
         )
-      )
+      }
       new_urls = [u for u in grp_urls if u not in existing]
       if new_urls:
         filtered_groups.append(new_urls)
@@ -274,6 +277,7 @@ def export_sitemap_ndjson():
         continue
 
       rows = []
+      new_urls_logged = []
       for item in crawled_data:
         url_val = item.get('url')
         loc_val = item.get('location')
@@ -285,9 +289,16 @@ def export_sitemap_ndjson():
           'lastmod': date.today(),
           'origin': 'booking.com',
         })
+        new_urls_logged.append(url_val)
 
       if rows:
-        HotelListing.bulk_upsert(rows, update_on_conflict=True)
+        inserted_count = HotelListing.bulk_upsert(rows)
+        if inserted_count:
+          log.info(
+            "Inserted %s hotel listings: %s",
+            inserted_count,
+            new_urls_logged,
+          )
 
     break
 

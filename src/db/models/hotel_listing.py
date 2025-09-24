@@ -1,15 +1,21 @@
+import logging
+import uuid
+from typing import List, Dict, Any
+
 from src.app import db
 from sqlalchemy import ForeignKey, UniqueConstraint, Index
 from sqlalchemy.sql import func
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from typing import List, Dict, Any
+from sqlalchemy.dialects.postgresql import insert as pg_insert, UUID
 
+
+
+log = logging.getLogger(__name__)
 
 
 class HotelListing(db.Model):
   __tablename__ = "hotel_listings"
 
-  id = db.Column(db.Integer, primary_key=True)
+  id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
   hotel_url = db.Column(db.Text, nullable=False)
   location = db.Column(db.Text)
   lastmod = db.Column(db.Date)
@@ -45,47 +51,47 @@ class HotelListing(db.Model):
     rows: List[Dict[str, Any]],
     *,
     chunk_size: int = 1000,
-    update_on_conflict: bool = False,
   ) -> int:
     """Insert many rows in a single transactional scope.
 
-    - Uses PostgreSQL ON CONFLICT to handle duplicates on (hotel_url, origin).
-    - If update_on_conflict=True, updates location/lastmod and touches updated_at.
-    - Processes in chunks inside one transaction to limit memory.
+    - Uses PostgreSQL ON CONFLICT DO NOTHING to avoid duplicates on (hotel_url, origin).
+    - Processes in chunks to limit memory usage.
 
     rows: list of dicts with keys: hotel_url, origin, location, lastmod
-    returns: number of input rows attempted (not the number newly inserted)
+    returns: number of rows inserted (duplicates skipped)
     """
     if not rows:
       return 0
 
     base_stmt = pg_insert(cls.__table__)
-    if update_on_conflict:
-      stmt = base_stmt.on_conflict_do_update(
-        index_elements=['hotel_url', 'origin'],
-        set_={
-          'location': base_stmt.excluded.location,
-          'lastmod': base_stmt.excluded.lastmod,
-          'updated_at': func.now(),
-        }
-      )
-    else:
-      stmt = base_stmt.on_conflict_do_nothing(
-        index_elements=['hotel_url', 'origin']
-      )
+    stmt = base_stmt.on_conflict_do_nothing(
+      index_elements=['hotel_url', 'origin']
+    )
 
     def _chunks(seq, n):
       for i in range(0, len(seq), n):
         yield seq[i:i+n]
 
-    total = 0
+    attempted = 0
+    inserted = 0
     try:
       for chunk in _chunks(rows, chunk_size):
-        db.session.execute(stmt, chunk)
-        total += len(chunk)
+        result = db.session.execute(stmt, chunk)
+        chunk_count = len(chunk)
+        attempted += chunk_count
+        # rowcount reflects number of rows actually inserted (duplicates -> 0)
+        inserted += result.rowcount or 0
       db.session.commit()
     except Exception:
       db.session.rollback()
       raise
 
-    return total
+    skipped = attempted - inserted
+    if skipped:
+      log.info(
+        "hotel_listings bulk_upsert skipped %s duplicate rows (attempted=%s, inserted=%s)",
+        skipped,
+        attempted,
+        inserted,
+      )
+    return inserted
