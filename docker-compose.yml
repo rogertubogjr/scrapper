@@ -13,11 +13,9 @@ services:
       # Safe defaults for development
       - DEBUG=true
       - PLAYWRIGHT_HEADLESS=true
-      - DATABASE_URL=postgresql+psycopg://postgres:${POSTGRES_DB_PASSWORD}@db:5432/db
     # Increase shared memory to reduce Chromium crashes
     shm_size: '1gb'
-    depends_on:
-      - db
+    # If you later add a DB, add depends_on here
 
   scheduler:
     build: .
@@ -34,14 +32,3 @@ services:
       - ./:/app
       - ./artifacts:/app/artifacts
     shm_size: '1gb'
-
-  db:
-    image: postgres:17.7-alpine
-    restart: always
-    environment:
-      POSTGRES_PASSWORD: ${POSTGRES_DB_PASSWORD}
-      POSTGRES_DB: db
-      TZ: 'Asia/Manila'
-    volumes:
-      - postgres15-data:/var/lib/postgresql/data
-    shm_size: 1gb
