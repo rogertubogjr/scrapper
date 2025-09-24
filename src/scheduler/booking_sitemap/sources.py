@@ -2,6 +2,7 @@ import gzip
 import logging
 import os
 import re
+import time
 from typing import Dict, List, Optional
 
 import requests
@@ -16,20 +17,55 @@ HTTP_HEADERS = {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
-    )
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Connection": "keep-alive",
 }
+RETRYABLE_STATUS_CODES = {202, 429, 500, 502, 503, 504}
+
+
+def _create_session() -> requests.Session:
+    session = requests.Session()
+    session.headers.update(HTTP_HEADERS)
+    return session
+
+
+def _request_with_retry(session: requests.Session, url: str, *, timeout: int = 30, max_attempts: int = 3) -> Optional[requests.Response]:
+    backoff = 1.0
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = session.get(url, timeout=timeout)
+        except requests.RequestException as exc:
+            log.warning("request attempt %s failed for %s: %s", attempt, url, exc)
+        else:
+            if response.status_code in RETRYABLE_STATUS_CODES and attempt < max_attempts:
+                retry_after = response.headers.get("Retry-After")
+                if retry_after and retry_after.isdigit():
+                    backoff = max(backoff, float(retry_after))
+                log.info("request attempt %s for %s returned %s; retrying after %.1fs", attempt, url, response.status_code, backoff)
+            else:
+                if response.status_code not in RETRYABLE_STATUS_CODES:
+                    return response
+                log.warning("request attempt %s for %s returned %s; no more retries", attempt, url, response.status_code)
+                return None
+
+        if attempt < max_attempts:
+            time.sleep(backoff)
+            backoff *= 2
+
+    return None
 
 
 def fetch_robots_sitemaps(robots_url: str = ROBOTS_URL) -> List[str]:
     """Return every sitemap URL declared in robots.txt."""
-    try:
-        resp = requests.get(robots_url, timeout=15, headers=HTTP_HEADERS)
-        resp.raise_for_status()
-    except requests.RequestException as exc:
-        log.warning("robots fetch failed: %s", exc)
+    session = _create_session()
+    response = _request_with_retry(session, robots_url)
+    if response is None:
+        log.warning("robots fetch failed after retries")
         return []
 
-    return re.findall(r"^Sitemap:\s*(\S+)$", resp.text, re.MULTILINE | re.IGNORECASE)
+    return re.findall(r"^Sitemap:\s*(\S+)$", response.text, re.MULTILINE | re.IGNORECASE)
 
 
 def select_hotel_index(sitemap_urls: List[str]) -> Optional[str]:
@@ -53,15 +89,14 @@ def get_hotel_sitemap_index() -> Optional[str]:
 
 def get_en_us_sitemap_entries(index_url: str) -> List[Dict[str, Optional[str]]]:
     """Return child sitemap entries (loc/lastmod) from the given index."""
-    try:
-        resp = requests.get(index_url, timeout=30, headers=HTTP_HEADERS)
-        resp.raise_for_status()
-    except requests.RequestException as exc:
-        log.warning("sitemap index fetch failed: %s", exc)
+    session = _create_session()
+    response = _request_with_retry(session, index_url)
+    if response is None:
+        log.warning("sitemap index fetch failed after retries")
         return []
 
-    content = resp.content
-    if index_url.endswith(".gz") or "gzip" in resp.headers.get("Content-Type", "").lower():
+    content = response.content
+    if index_url.endswith(".gz") or "gzip" in response.headers.get("Content-Type", "").lower():
         try:
             content = gzip.decompress(content)
         except OSError:
@@ -110,15 +145,13 @@ def download_sitemap(entry: Dict[str, Optional[str]], xml_dir: str) -> str:
 
     dest_path = os.path.join(xml_dir, filename)
 
-    try:
-        resp = requests.get(url, timeout=30, headers=HTTP_HEADERS)
-        resp.raise_for_status()
-    except requests.RequestException as exc:
-        log.warning("sitemap download failed: %s", exc)
-        raise
+    session = _create_session()
+    response = _request_with_retry(session, url)
+    if response is None:
+        raise ValueError(f"sitemap download failed after retries for {url}")
 
-    payload = resp.content
-    if url.endswith(".gz") or "gzip" in resp.headers.get("Content-Type", "").lower():
+    payload = response.content
+    if url.endswith(".gz") or "gzip" in response.headers.get("Content-Type", "").lower():
         try:
             payload = gzip.decompress(payload)
         except OSError:
@@ -129,4 +162,3 @@ def download_sitemap(entry: Dict[str, Optional[str]], xml_dir: str) -> str:
 
     log.info("Saved sitemap XML: %s (%d bytes)", dest_path, len(payload))
     return dest_path
-
