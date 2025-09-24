@@ -24,3 +24,6 @@ Quart==0.20.0
 quart-cors==0.8.0
 APScheduler==3.11.0
 requests>=2.32.3
+SQLAlchemy==2.0.43
+alembic==1.16.5
+psycopg[binary]==3.2.10

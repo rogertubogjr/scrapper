@@ -176,6 +176,10 @@ Quick Commands
 - Docker logs: `docker compose logs -f api`
 - Docker stop: `docker compose down`
 - Docker (prod): `docker compose -f docker-compose-prod.yml up -d --build`
+- Alembic (DB migrations):
+  - Create a revision: `alembic revision -m "message" --autogenerate`
+  - Apply latest: `alembic upgrade head`
+  - Rollback one: `alembic downgrade -1`
 
 Contact & Next Steps
 
