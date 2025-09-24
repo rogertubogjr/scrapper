@@ -1,7 +1,7 @@
 import logging
 
 from src.app import app
-from src.scheduler.booking_sitemap_ingest import export_sitemap_ndjson
+from src.scheduler.booking_sitemap import export_sitemap_ndjson
 
 
 log = logging.getLogger(__name__)

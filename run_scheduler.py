@@ -30,7 +30,7 @@ async def main() -> None:
 
     # Default to hourly: minute 0, every hour (UTC)
     popular_cron_expr = os.getenv("CRON_POPULAR", "0 * * * *")
-    booking_cron_expr = os.getenv("CRON_BOOKING_SITEMAP", "39 16 * * *")
+    booking_cron_expr = os.getenv("CRON_BOOKING_SITEMAP", "0 * * * *")
 
     scheduler = AsyncIOScheduler(timezone="UTC")
     scheduler.add_job(
