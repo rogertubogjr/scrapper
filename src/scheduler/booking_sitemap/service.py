@@ -128,12 +128,10 @@ def _process_ndjson_files(ndjson_dir: str, *, group_size: int, max_groups: int) 
 
 
 def export_sitemap_ndjson() -> None:
-    print('pass')
     base_dir, xml_dir, ndjson_dir = _resolve_dirs()
     log.debug("Using sitemap directory %s", base_dir)
 
     index_url = sources.get_hotel_sitemap_index()
-    print('🚀 ~ index_url:', index_url)
     if not index_url:
         log.warning("No hotel sitemap index found")
         return

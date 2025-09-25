@@ -8,6 +8,8 @@ Usage
 """
 
 import os
+from typing import Optional
+
 from dotenv import load_dotenv
 
 
@@ -26,6 +28,14 @@ def _get_int(name: str, default: int) -> int:
         return int(str(val).strip())
     except ValueError:
         return default
+
+
+def _get_str(name: str, default: Optional[str] = None) -> Optional[str]:
+    val = os.getenv(name)
+    if val is None:
+        return default
+    val = str(val).strip()
+    return val or default
 
 
 # Load environment variables from a .env file if present
@@ -50,6 +60,9 @@ PLAYWRIGHT_ARGS = [
     "--disable-setuid-sandbox",
 ]
 PLAYWRIGHT_ARTIFACT_DIR = os.getenv("PLAYWRIGHT_ARTIFACT_DIR", os.path.join(os.getcwd(), "artifacts"))
+PLAYWRIGHT_PROXY_SERVER = _get_str("PLAYWRIGHT_PROXY_SERVER")
+PLAYWRIGHT_PROXY_USERNAME = _get_str("PLAYWRIGHT_PROXY_USERNAME")
+PLAYWRIGHT_PROXY_PASSWORD = _get_str("PLAYWRIGHT_PROXY_PASSWORD")
 
 # Scheduler / ingest defaults
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

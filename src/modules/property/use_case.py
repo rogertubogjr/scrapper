@@ -40,6 +40,18 @@ def _get_bool(name: str, default: bool) -> bool:
   return str(v).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _get_str(name: str, default: Optional[str] = None) -> Optional[str]:
+  """Return a config/environment string with fallback whitespace stripping."""
+  cfg = current_app.config if current_app else {}
+  v = cfg.get(name)
+  if v is None:
+    v = os.getenv(name)
+  if v is None:
+    return default
+  v = str(v).strip()
+  return v or default
+
+
 async def run_agent_action(input_data, agent, session=None, return_final_output=False):
   result = await Runner.run(
     agent,
@@ -200,12 +212,28 @@ async def run_playwright(url) -> Dict[str, Any]:
 
   items: List[Dict[str, str]] = []
 
+  proxy_server = _get_str("PLAYWRIGHT_PROXY_SERVER")
+  proxy_username = _get_str("PLAYWRIGHT_PROXY_USERNAME")
+  proxy_password = _get_str("PLAYWRIGHT_PROXY_PASSWORD")
+
+  proxy_settings = None
+  if proxy_server:
+    proxy_settings = {"server": proxy_server}
+    if proxy_username:
+      proxy_settings["username"] = proxy_username
+    if proxy_password:
+      proxy_settings["password"] = proxy_password
+
   async with async_playwright() as pw:
-    browser = await pw.chromium.launch(headless=headless, args=[
-      "--disable-blink-features=AutomationControlled",
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-    ])
+    browser = await pw.chromium.launch(
+      headless=headless,
+      args=[
+        "--disable-blink-features=AutomationControlled",
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+      ],
+      proxy=proxy_settings,
+    )
     context = await browser.new_context(
       user_agent=(
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

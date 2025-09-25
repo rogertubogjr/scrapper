@@ -77,7 +77,6 @@ def fetch_robots_sitemaps(robots_url: str = ROBOTS_URL) -> List[str]:
     """Return every sitemap URL declared in robots.txt."""
     session = _create_session(with_proxy=True)
     response = _request_with_retry(session, robots_url)
-    print('🚀 ~ response:', response)
     if response is None:
         log.warning("robots fetch failed after retries")
         return []
