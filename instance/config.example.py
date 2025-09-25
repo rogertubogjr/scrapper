@@ -67,6 +67,7 @@ PLAYWRIGHT_PROXY_PASSWORD = _get_str("PLAYWRIGHT_PROXY_PASSWORD")
 # Scheduler / ingest defaults
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 CRON_POPULAR = os.getenv("CRON_POPULAR", "0 * * * *")
+CRON_BOOKING_SITEMAP_MATERIALIZE = os.getenv("CRON_BOOKING_SITEMAP_MATERIALIZE", "0 * * * *")
 CRON_BOOKING_SITEMAP = os.getenv("CRON_BOOKING_SITEMAP", "0 * * * *")
 
 SITEMAP_DIR = os.getenv("SITEMAP_DIR", "/app/sitemap_data")

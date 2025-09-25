@@ -42,10 +42,12 @@ Scheduler (Cron-like Jobs)
 
 - Module: APScheduler (added). A separate scheduler process runs jobs that can reuse use-cases.
 - Entrypoint: `run_scheduler.py` (starts APScheduler with AsyncIO).
-- Jobs live in: `src/scheduler/jobs.py` (examples: `crawl_popular`, `ingest_booking_sitemaps`).
+- Jobs live in: `src/scheduler/jobs.py` (examples: `crawl_popular`, `materialize_booking_sitemaps_job`, `ingest_booking_sitemaps`).
 - Scheduler runs in UTC; set cron expressions accordingly.
 - Configure schedule via env: `CRON_POPULAR` (crontab, default hourly `0 * * * *`).
+- Booking sitemap file sync via env: `CRON_BOOKING_SITEMAP_MATERIALIZE` (crontab, default hourly `0 * * * *`).
 - Booking sitemap ingest schedule via env: `CRON_BOOKING_SITEMAP` (crontab, default hourly `0 * * * *`).
+- Booking sitemap workflow runs in two stages: materialize downloads XML→NDJSON, and ingest scans NDJSON for new hotel URLs before crawling details.
 - Docker dev: a `scheduler` service is added to `docker-compose.yml`.
 - Docker prod: a `scheduler` service is added to `docker-compose-prod.yml` with restart + logging.
 - Notes: jobs may enter the Flask app context if needed; keep `PLAYWRIGHT_HEADLESS=true` and `shm_size: 1gb`.

@@ -127,34 +127,50 @@ def _process_ndjson_files(ndjson_dir: str, *, group_size: int, max_groups: int) 
             break
 
 
-def export_sitemap_ndjson() -> None:
+def materialize_booking_sitemaps(*, limit: int | None = None) -> List[str]:
+    """Download booking sitemap XML files and export them to NDJSON."""
     base_dir, xml_dir, ndjson_dir = _resolve_dirs()
     log.debug("Using sitemap directory %s", base_dir)
 
     index_url = sources.get_hotel_sitemap_index()
     if not index_url:
         log.warning("No hotel sitemap index found")
-        return
+        return []
 
     entries = sources.get_en_us_sitemap_entries(index_url)
     if not entries:
         log.info("No en-us sitemap entries discovered from %s", index_url)
-        return
+        return []
+
+    if limit is not None and limit > 0:
+        entries = entries[:limit]
 
     worker_threads = _get_env_int('SITEMAP_WORKER_THREADS', 4)
-    subset = entries[:1]
 
     def _download(entry):
         return sources.download_sitemap(entry, xml_dir)
 
     with ThreadPoolExecutor(max_workers=worker_threads) as executor:
-        xml_paths = list(executor.map(_download, subset))
+        xml_paths = list(executor.map(_download, entries))
 
     def _to_ndjson(xml_path):
         return parser.export_sitemap_urls_to_ndjson(xml_path, output_dir=ndjson_dir)
 
     with ThreadPoolExecutor(max_workers=worker_threads) as executor:
-        list(executor.map(_to_ndjson, xml_paths))
+        ndjson_paths = list(executor.map(_to_ndjson, xml_paths))
 
+    log.info("Materialized %d sitemap files to NDJSON", len(ndjson_paths))
+    return ndjson_paths
+
+
+def ingest_booking_sitemaps_from_ndjson(*, max_groups: int = 2) -> None:
+    """Read prepared NDJSON files and ingest new Booking listings."""
+    _base_dir, _xml_dir, ndjson_dir = _resolve_dirs()
     group_size = _get_env_int('PARALLEL_URL_TO_SCRAPE', 10)
-    _process_ndjson_files(ndjson_dir, group_size=group_size, max_groups=2)
+    _process_ndjson_files(ndjson_dir, group_size=group_size, max_groups=max_groups)
+
+
+def export_sitemap_ndjson() -> None:
+    """Backward-compatible wrapper that materializes and ingests sitemaps."""
+    materialize_booking_sitemaps()
+    ingest_booking_sitemaps_from_ndjson()
