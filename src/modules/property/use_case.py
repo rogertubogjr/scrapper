@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Iterator, Optional
 from crawl4ai import (
   AsyncWebCrawler,
   BrowserConfig,
+  CacheMode,
   CrawlerRunConfig,
   JsonXPathExtractionStrategy,
 )
@@ -81,7 +82,8 @@ async def run_crawler(url) -> Dict[str, Any]:
   proxy_password = _get_str("PLAYWRIGHT_PROXY_PASSWORD")
 
   proxy_cfg = None
-  if proxy_server:
+  proxy_enabled = _get_bool("PROXY_ENABLED", False)
+  if proxy_enabled and proxy_server:
     proxy_cfg = {"server": proxy_server}
     if proxy_username:
       proxy_cfg["username"] = proxy_username
@@ -91,8 +93,25 @@ async def run_crawler(url) -> Dict[str, Any]:
   browser_cfg = BrowserConfig(headless=headless, proxy_config=proxy_cfg)
   wait_condition = """() => {
         const items = document.querySelectorAll('[data-testid=\"property-card\"]');
-        return items.length > 5;
+        return items.length > 3;
     }"""
+  js_next_page = """
+      const btn = Array.from(document.querySelectorAll("button span"))
+      .find(el => el.textContent.trim() === "Load more results");
+      console.log('Trii-------')
+      btn?.click();
+  """
+  wait_for_more = """js:() => {
+      const btn = Array.from(document.querySelectorAll("button span"))
+      .find(el => el.textContent.trim() === "Load more results");
+
+      if(btn) {
+          return false
+      } else {
+          return true
+      }
+  }"""
+  session_id = "hoter_properties"
 
   schema = {
     "name": "Hotels",
@@ -141,14 +160,47 @@ async def run_crawler(url) -> Dict[str, Any]:
     extraction_strategy=JsonXPathExtractionStrategy(schema, verbose=True),
     wait_for=f"js:{wait_condition}",
     scan_full_page=True,
-    scroll_delay=1.2,
+    exclude_all_images=True,
+    session_id = session_id
+    # scroll_delay=1.2,
   )
+
 
   async with AsyncWebCrawler(verbose=True, config=browser_cfg) as crawler:
     result = await crawler.arun(
       url=url,
       config=config,
     )
+
+    loop_limit = 10
+    while True:
+      loop_limit -= 1
+      if loop_limit == 0:
+        break
+
+      config_next = CrawlerRunConfig(
+          extraction_strategy=JsonXPathExtractionStrategy(schema, verbose=True),
+          session_id=session_id,
+          js_code=js_next_page,
+          wait_for=wait_for_more,
+          js_only=True,       # We're continuing from the open tab
+          cache_mode=CacheMode.BYPASS,
+          scan_full_page= True,
+          exclude_all_images=True,
+      )
+      result2 = await crawler.arun(
+          url=url,
+          config=config_next
+      )
+      if not result.success:
+        break
+      if result2.success:
+        len_result = len(json.loads(result2.extracted_content))
+        len_last_result = len(json.loads(result.extracted_content))
+        if (result2.extracted_content and len(json.loads(result2.extracted_content)) > 100) or \
+          len_result == len_last_result:
+          break
+        result = result2
 
     if not result.success:
       log.warning("Crawl failed: %s", result.error_message)
@@ -227,9 +279,10 @@ async def run_playwright(url) -> Dict[str, Any]:
   proxy_server = _get_str("PLAYWRIGHT_PROXY_SERVER")
   proxy_username = _get_str("PLAYWRIGHT_PROXY_USERNAME")
   proxy_password = _get_str("PLAYWRIGHT_PROXY_PASSWORD")
+  proxy_enabled = _get_bool("PROXY_ENABLED", False)
 
   proxy_settings = None
-  if proxy_server:
+  if proxy_enabled and proxy_server:
     proxy_settings = {"server": proxy_server}
     if proxy_username:
       proxy_settings["username"] = proxy_username

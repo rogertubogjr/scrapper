@@ -82,6 +82,7 @@ Configuration & Secrets
     - `PLAYWRIGHT_DEBUG_PRINT` (default False): when enabled, logs the page title and a truncated HTML snippet (default 10k chars) at WARNING level after navigation.
     - `PLAYWRIGHT_DEBUG_PRINT_MAX` (default 10000): max characters of HTML to log when debug print is enabled.
     - `PLAYWRIGHT_PROXY_SERVER`, `PLAYWRIGHT_PROXY_USERNAME`, `PLAYWRIGHT_PROXY_PASSWORD`: optional upstream proxy credentials for Playwright scraping.
+    - `PROXY_ENABLED` (default False): disable to bypass proxy configuration entirely.
 - Auth expectations for `api_auth_token.py`:
   - `TOKEN` for static token checks, or `SECRET_KEY` for JWT (HS256) verification.
   - Clients may send tokens via `x-access-token` or `Authorization: Bearer <token>`.

@@ -22,7 +22,7 @@ def booking_search_url_agent(filters):
       3. Defaults
         • If checkin is omitted, use today’s date (YYYY-MM-DD).
         • If checkout is omitted, use tomorrow’s date (YYYY-MM-DD).
-        • group_adults defaults to 2.
+        • group_adults defaults to 1.
         • no_rooms defaults to 1.
         • group_children defaults to 0.
         • If no filters are provided, omit the nflt parameter.
