@@ -51,22 +51,22 @@ async def main() -> None:
         coalesce=True,
         replace_existing=True,
     )
-    scheduler.add_job(
-        _booking_sitemap_materialize_job,
-        CronTrigger.from_crontab(booking_materialize_cron_expr, timezone="UTC"),
-        id="materialize_booking_sitemaps",
-        max_instances=1,
-        coalesce=True,
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        _booking_sitemap_ingest_job,
-        CronTrigger.from_crontab(booking_cron_expr, timezone="UTC"),
-        id="ingest_booking_sitemaps",
-        max_instances=1,
-        coalesce=True,
-        replace_existing=True,
-    )
+    # scheduler.add_job(
+    #     _booking_sitemap_materialize_job,
+    #     CronTrigger.from_crontab(booking_materialize_cron_expr, timezone="UTC"),
+    #     id="materialize_booking_sitemaps",
+    #     max_instances=1,
+    #     coalesce=True,
+    #     replace_existing=True,
+    # )
+    # scheduler.add_job(
+    #     _booking_sitemap_ingest_job,
+    #     CronTrigger.from_crontab(booking_cron_expr, timezone="UTC"),
+    #     id="ingest_booking_sitemaps",
+    #     max_instances=1,
+    #     coalesce=True,
+    #     replace_existing=True,
+    # )
     scheduler.start()
 
     log.info(

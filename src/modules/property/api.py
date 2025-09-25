@@ -10,12 +10,6 @@ from src.middlewares.api_auth_token import requires
 
 
 class Properties(Resource):
-  def get(self):
-      # Lazy import to avoid circular dependency when scheduler loads models
-      from src.scheduler.booking_sitemap.service import export_sitemap_ndjson
-
-      export_sitemap_ndjson()
-
   def post(self):
       """Accept arbitrary text, JSON, or form data and pass it as a string.
 

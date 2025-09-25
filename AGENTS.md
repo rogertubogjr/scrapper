@@ -48,6 +48,8 @@ Scheduler (Cron-like Jobs)
 - Booking sitemap file sync via env: `CRON_BOOKING_SITEMAP_MATERIALIZE` (crontab, default hourly `0 * * * *`).
 - Booking sitemap ingest schedule via env: `CRON_BOOKING_SITEMAP` (crontab, default hourly `0 * * * *`).
 - Booking sitemap workflow runs in two stages: materialize downloads XML→NDJSON, and ingest scans NDJSON for new hotel URLs before crawling details.
+  - Materialize logic: `src/scheduler/booking_sitemap/materialize/service.py`
+  - Ingest logic: `src/scheduler/booking_sitemap/ingest/service.py`
 - Docker dev: a `scheduler` service is added to `docker-compose.yml`.
 - Docker prod: a `scheduler` service is added to `docker-compose-prod.yml` with restart + logging.
 - Notes: jobs may enter the Flask app context if needed; keep `PLAYWRIGHT_HEADLESS=true` and `shm_size: 1gb`.
