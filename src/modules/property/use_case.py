@@ -82,27 +82,13 @@ async def run_crawler(url) -> Dict[str, Any]:
 
   proxy_cfg = None
   if proxy_server:
-    server = proxy_server.strip()
-    if server and "://" not in server:
-      server = f"http://{server}"
-
-    proxy_cfg = {"server": server}
+    proxy_cfg = {"server": proxy_server}
     if proxy_username:
       proxy_cfg["username"] = proxy_username
     if proxy_password:
       proxy_cfg["password"] = proxy_password
 
-    if proxy_username and not proxy_password:
-      log.warning("Proxy username provided without password; continuing without auth")
-    if proxy_password and not proxy_username:
-      log.warning("Proxy password provided without username; continuing without auth")
-
   browser_cfg = BrowserConfig(headless=headless, proxy_config=proxy_cfg)
-  if proxy_cfg:
-    try:
-      log.debug("run_crawler routing through proxy %s", proxy_cfg.get("server", ""))
-    except Exception:
-      log.debug("run_crawler routing through proxy")
   wait_condition = """() => {
         const items = document.querySelectorAll('[data-testid=\"property-card\"]');
         return items.length > 5;
@@ -258,7 +244,7 @@ async def run_playwright(url) -> Dict[str, Any]:
         "--no-sandbox",
         "--disable-setuid-sandbox",
       ],
-      proxy=proxy_settings,
+      # proxy=proxy_settings,
     )
     context = await browser.new_context(
       user_agent=(
@@ -280,7 +266,7 @@ async def run_playwright(url) -> Dict[str, Any]:
     page = await context.new_page()
     await page.goto(url, wait_until="domcontentloaded")
     try:
-      await page.wait_for_load_state("networkidle", timeout=10000)
+      await page.wait_for_load_state("networkidle", timeout=7000)
     except Exception:
       pass
 
@@ -399,6 +385,7 @@ def get_properties(prompt: str) -> Dict[str, Any]:
     return mapping
 
   raw_filters = run_async(run_playwright(initial_url))
+  print('\n\n********raw_filters',raw_filters, '\n\n')
   filters_map = _parse_checkbox_filters(raw_filters)
   filters_json = json.dumps(filters_map, ensure_ascii=False)
 
