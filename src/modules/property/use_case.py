@@ -12,7 +12,6 @@ from datetime import date, timedelta
 import xml.etree.ElementTree as ET
 
 from flask import current_app
-from urllib.parse import quote
 from playwright.async_api import async_playwright
 from src.agent_helpers.destination_extractor import ah_destination_extractor
 from src.agent_helpers.booking_search_url_agent import booking_search_url_agent
@@ -81,27 +80,27 @@ async def run_crawler(url) -> Dict[str, Any]:
   proxy_username = _get_str("PLAYWRIGHT_PROXY_USERNAME")
   proxy_password = _get_str("PLAYWRIGHT_PROXY_PASSWORD")
 
-  proxy_url = None
+  proxy_cfg = None
   if proxy_server:
-    server = proxy_server
-    if "://" not in server:
+    server = proxy_server.strip()
+    if server and "://" not in server:
       server = f"http://{server}"
-    if proxy_username or proxy_password:
-      if proxy_username and proxy_password:
-        scheme, remainder = server.split("://", 1)
-        safe_user = quote(proxy_username, safe="")
-        safe_pass = quote(proxy_password, safe="")
-        proxy_url = f"{scheme}://{safe_user}:{safe_pass}@{remainder}"
-      else:
-        proxy_url = server
-        log.warning("Proxy credentials incomplete; falling back to unauthenticated proxy")
-    else:
-      proxy_url = server
 
-  browser_cfg = BrowserConfig(headless=headless, proxy=proxy_url)
-  if proxy_url:
+    proxy_cfg = {"server": server}
+    if proxy_username:
+      proxy_cfg["username"] = proxy_username
+    if proxy_password:
+      proxy_cfg["password"] = proxy_password
+
+    if proxy_username and not proxy_password:
+      log.warning("Proxy username provided without password; continuing without auth")
+    if proxy_password and not proxy_username:
+      log.warning("Proxy password provided without username; continuing without auth")
+
+  browser_cfg = BrowserConfig(headless=headless, proxy_config=proxy_cfg)
+  if proxy_cfg:
     try:
-      log.debug("run_crawler routing through proxy %s", server.split("://", 1)[1])
+      log.debug("run_crawler routing through proxy %s", proxy_cfg.get("server", ""))
     except Exception:
       log.debug("run_crawler routing through proxy")
   wait_condition = """() => {
