@@ -244,7 +244,7 @@ async def run_playwright(url) -> Dict[str, Any]:
         "--no-sandbox",
         "--disable-setuid-sandbox",
       ],
-      # proxy=proxy_settings,
+      proxy=proxy_settings,
     )
     context = await browser.new_context(
       user_agent=(
