@@ -25,9 +25,25 @@ HTTP_HEADERS = {
 RETRYABLE_STATUS_CODES = {202, 429, 500, 502, 503, 504}
 
 
-def _create_session() -> requests.Session:
+def _resolve_proxies() -> Dict[str, str]:
+    proxy = os.getenv("BOOKING_HTTPS_PROXY") or os.getenv("BOOKING_HTTP_PROXY")
+    if not proxy:
+        return {}
+
+    log.info("Booking sitemap requests using HTTPS proxy configuration")
+    return {"https": proxy}
+
+
+def _create_session(with_proxy: bool = True) -> requests.Session:
     session = requests.Session()
     session.headers.update(HTTP_HEADERS)
+
+    if with_proxy:
+        proxies = _resolve_proxies()
+        if proxies:
+            session.trust_env = False
+            session.proxies.update(proxies)
+
     return session
 
 
@@ -59,8 +75,9 @@ def _request_with_retry(session: requests.Session, url: str, *, timeout: int = 3
 
 def fetch_robots_sitemaps(robots_url: str = ROBOTS_URL) -> List[str]:
     """Return every sitemap URL declared in robots.txt."""
-    session = _create_session()
+    session = _create_session(with_proxy=True)
     response = _request_with_retry(session, robots_url)
+    print('🚀 ~ response:', response)
     if response is None:
         log.warning("robots fetch failed after retries")
         return []
@@ -84,10 +101,12 @@ def select_hotel_index(sitemap_urls: List[str]) -> Optional[str]:
 def get_hotel_sitemap_index() -> Optional[str]:
     """Fetch robots.txt and return the preferred hotel sitemap index URL."""
     sitemap_urls = fetch_robots_sitemaps()
+    print('🚀 ~ sitemap_urls:', sitemap_urls)
     return select_hotel_index(sitemap_urls)
 
 
 def get_en_us_sitemap_entries(index_url: str) -> List[Dict[str, Optional[str]]]:
+    print('🚀 ~ index_url:', index_url)
     """Return child sitemap entries (loc/lastmod) from the given index."""
     session = _create_session()
     response = _request_with_retry(session, index_url)
@@ -111,7 +130,6 @@ def get_en_us_sitemap_entries(index_url: str) -> List[Dict[str, Optional[str]]]:
     ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
     entries: List[Dict[str, Optional[str]]] = []
     for node in root.findall("sm:sitemap", ns):
-        print('pass',entries)
         loc_el = node.find("sm:loc", ns)
         lastmod_el = node.find("sm:lastmod", ns)
         # if 'en-us' not in loc_el.text.strip() or loc_el is None or not (loc_el.text or "").strip():

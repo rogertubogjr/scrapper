@@ -1,19 +1,27 @@
-import asyncio
-import json
-import logging
+import asyncio, os, json, logging
 from typing import Any, Dict, List
 
 from crawl4ai import (
     AsyncWebCrawler,
     BrowserConfig,
+    CacheMode,
     CrawlerRunConfig,
     JsonXPathExtractionStrategy,
+    LLMConfig,
+    LLMExtractionStrategy,
     MemoryAdaptiveDispatcher,
 )
 from flask import current_app
 
 
 log = logging.getLogger(__name__)
+
+from typing import List, Dict
+from pydantic import BaseModel, Field, HttpUrl
+
+class SitemapUrl(BaseModel):
+  sitemap_urls: str = Field(..., description="Fully qualified Booking sitemap XML URL (e.g., https://…/..index.xml).")
+
 
 
 def _get_bool(name: str, default: bool) -> bool:
@@ -101,3 +109,45 @@ async def run_crawler(urls: List[str]) -> List[Dict[str, Any]]:
 
     return url_and_locations
 
+
+async def crawl_robots_txt():
+  # 1. Define the LLM extraction strategy
+  llm_strategy = LLMExtractionStrategy(
+      llm_config = LLMConfig(provider="openai/gpt-5-mini", api_token=os.getenv('OPENAI_API_KEY')),
+      schema=SitemapUrl.model_json_schema(), # Or use model_json_schema()
+      extraction_type="schema",
+      instruction="""
+        Extract only the fully-qualified Booking sitemap XML URLs present in the provided text
+        (for example, https://www.booking.com/sitemaps/...-index.xml).
+        The content is delivered in multiple chunks; treat each chunk independently and
+        do not follow, expand, or fetch any referenced URLs—simply collect the absolute
+        URLs that already appear in the text.
+      """,
+      chunk_token_threshold=3000,
+      overlap_rate=0.2,
+      apply_chunking=True,
+      input_format="markdown",   # or "html", "fit_markdown"
+      extra_args={"temperature": 1}
+  )
+
+  # 2. Build the crawler config
+  crawl_config = CrawlerRunConfig(
+      extraction_strategy=llm_strategy,
+      cache_mode=CacheMode.BYPASS,
+      screenshot=True,
+      pdf=True,
+      scan_full_page=True,  # Tells the crawler to try scrolling the entire page
+      scroll_delay=0.5,     # Delay (seconds) between scroll steps
+      # wait_for_images=True,
+  )
+
+  # 3. Create a browser config if needed
+  browser_cfg = BrowserConfig(headless=True)
+
+  async with AsyncWebCrawler(config=browser_cfg) as crawler:
+      # 4. Let's say we want to crawl a single page
+      result = await crawler.arun(
+          url="https://www.booking.com/robots.txt",
+          config=crawl_config
+      )
+      print(result.extracted_content)
