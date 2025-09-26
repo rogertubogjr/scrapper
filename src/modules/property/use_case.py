@@ -21,14 +21,25 @@ from src.handler.error_handler import InvalidDataError, NotFoundError, Unexpecte
 log = logging.getLogger(__name__)
 
 
+_RUNNER_LOOP: Optional[asyncio.AbstractEventLoop] = None
+
+
 def run_async(coro):
-  """Run async coroutine from sync context safely."""
-  loop = asyncio.new_event_loop()
-  asyncio.set_event_loop(loop)
+  """Run async coroutine from sync context using a persistent event loop."""
   try:
-    return loop.run_until_complete(coro)
-  finally:
-    loop.close()
+    running_loop = asyncio.get_running_loop()
+  except RuntimeError:
+    running_loop = None
+
+  if running_loop and running_loop.is_running():
+    raise RuntimeError("run_async cannot execute inside an active event loop")
+
+  global _RUNNER_LOOP
+  if _RUNNER_LOOP is None or _RUNNER_LOOP.is_closed():
+    _RUNNER_LOOP = asyncio.new_event_loop()
+    asyncio.set_event_loop(_RUNNER_LOOP)
+
+  return _RUNNER_LOOP.run_until_complete(coro)
 
 
 def _get_bool(name: str, default: bool) -> bool:
@@ -173,6 +184,7 @@ async def run_crawler(url) -> Dict[str, Any]:
     )
 
     loop_limit = 10
+    same_length = 0
     while True:
       loop_limit -= 1
       if loop_limit == 0:
@@ -193,13 +205,20 @@ async def run_crawler(url) -> Dict[str, Any]:
           config=config_next
       )
       if not result.success:
+        print('\n\n ERROR \n\n')
         break
       if result2.success:
+
+        if (result2.extracted_content and len(json.loads(result2.extracted_content)) > 100):
+          break
+
         len_result = len(json.loads(result2.extracted_content))
         len_last_result = len(json.loads(result.extracted_content))
-        if (result2.extracted_content and len(json.loads(result2.extracted_content)) > 100) or \
-          len_result == len_last_result:
-          break
+        if len_result == len_last_result:
+          print(f'\n\n SAME LENGTH RESULT [{same_length}]\n\n')
+          same_length += 1
+          if same_length == 3:
+            break
         result = result2
 
     if not result.success:
@@ -237,7 +256,7 @@ async def run_crawler(url) -> Dict[str, Any]:
               l = "https://www.booking.com" + l
             itm["link"] = l
           if isinstance(location, str) and location.strip():
-            itm["location"] = location.strip()
+            itm["location"] = location.strip().replace('Show on map','')
           if isinstance(rating, str) and rating.strip():
             itm["rating_reviews"] = rating.strip()
           if isinstance(room_info, str) and room_info.strip():
@@ -246,7 +265,6 @@ async def run_crawler(url) -> Dict[str, Any]:
             itm["price"] = price.strip()
           if isinstance(fees, str) and fees.strip():
             itm["fees"] = fees.strip()
-
           if itm:
             items.append(itm)
     except Exception as e:
@@ -448,6 +466,8 @@ def get_properties(prompt: str) -> Dict[str, Any]:
     raise UnexpectedError("Failed to generate a search URL.")
 
   final_url = url_data["url"]
+
+  print(f'\n\nfinal_url {final_url} \n\n')
 
   crawl = run_async(run_crawler(final_url))
   if not isinstance(crawl, dict):

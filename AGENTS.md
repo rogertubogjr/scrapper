@@ -111,6 +111,7 @@ Agents & Helpers
 - `src/agent_helpers/destination_extractor.py`: extracts destination from prompt.
 - `src/agent_helpers/booking_search_url_agent.py`: Booking Search URL Builder; composes a deep link using destination, dates, occupancy, and provided filter-code map.
 - Backwards alias: `src/agent_helpers/url_generator.py` re-exports the booking URL agent as `url_generator`.
+- `src/agent_helpers/property_data_normalizer.py`: LLM parser that cleans scraped property payloads, normalizes rating/price text, and emits a structured JSON skeleton for ranking.
 
 Playwright & Crawl4AI
 
@@ -153,6 +154,7 @@ API Notes (Property)
 
 - Use `POST /properties` with a `prompt` string; it returns `{ destination, url, count, items, source, headless }`.
 - Errors are typed via `InvalidDataError`, `NotFoundError`, and `UnexpectedError` for consistent HTTP responses.
+- Authentication: include either `x-access-token: <TOKEN>` or `Authorization: Bearer <TOKEN>`; tokens are validated against `TOKEN` or JWTs signed with `SECRET_KEY`.
 
 Testing & Validation
 

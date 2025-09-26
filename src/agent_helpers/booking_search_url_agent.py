@@ -25,6 +25,7 @@ def booking_search_url_agent(filters):
         • group_adults defaults to 1.
         • no_rooms defaults to 1.
         • group_children defaults to 0.
+        • When no currency_code is provided, assume USD for pricing parameters.
         • If no filters are provided, omit the nflt parameter.
 
       4. Base URL and Core Parameters
@@ -60,6 +61,8 @@ def booking_search_url_agent(filters):
         - Start with the base URL and core params.
         - Ensure that all filters are relevant to the user's prompt to avoid hallucination — only translate codes for filters that are explicitly mentioned.
         - Append &nflt=<…> to the URL.
+        - Determine the currency_code: use the provided value when present; otherwise fall back to USD.
+        - Append `&selected_currency=<currency_code>` as the final query parameter so the UI reflects the chosen currency.
         - Ensure proper URL-encoding (e.g. semicolons → %3B).
 
       8. Output
@@ -84,4 +87,3 @@ def booking_search_url_agent(filters):
         &nflt=price%3DUSD-100-200-1%3Bht_beach%3D1%3Bmealplan%3D1
   """
     )
-
