@@ -103,25 +103,34 @@ async def run_crawler(url) -> Dict[str, Any]:
 
   browser_cfg = BrowserConfig(headless=headless, proxy_config=proxy_cfg)
   wait_condition = """() => {
-        const items = document.querySelectorAll('[data-testid=\"property-card\"]');
-        return items.length > 3;
-    }"""
+    const el = Array.from(document.querySelectorAll("h1"))
+      .find(el => el.textContent.trim().includes("properties found"));
+
+    const items = document.querySelectorAll('[data-testid="property-card"]');
+
+    let no_of_properties = null;
+    if (el) {
+      const match = el.textContent.match(/\\d+/);  // 👈 double backslash
+      if (match) {
+        no_of_properties = parseInt(match[0], 10);
+      }
+    }
+    console.log(no_of_properties, '--------------------', items.length)
+
+    if(no_of_properties < 100 && items.length == no_of_properties) {
+      return true
+    } else if(no_of_properties < 100 && no_of_properties < items.length) {
+      return true
+    } else if(no_of_properties > 100 && items.length > 5) {
+      return true
+    }
+  }"""
   js_next_page = """
       const btn = Array.from(document.querySelectorAll("button span"))
       .find(el => el.textContent.trim() === "Load more results");
       console.log('Trii-------')
       btn?.click();
   """
-  wait_for_more = """js:() => {
-      const btn = Array.from(document.querySelectorAll("button span"))
-      .find(el => el.textContent.trim() === "Load more results");
-
-      if(btn) {
-          return false
-      } else {
-          return true
-      }
-  }"""
   session_id = "hoter_properties"
 
   schema = {
@@ -183,43 +192,33 @@ async def run_crawler(url) -> Dict[str, Any]:
       config=config,
     )
 
-    loop_limit = 10
-    same_length = 0
-    while True:
-      loop_limit -= 1
-      if loop_limit == 0:
-        break
-
-      config_next = CrawlerRunConfig(
-          extraction_strategy=JsonXPathExtractionStrategy(schema, verbose=True),
-          session_id=session_id,
-          js_code=js_next_page,
-          wait_for=wait_for_more,
-          js_only=True,       # We're continuing from the open tab
-          cache_mode=CacheMode.BYPASS,
-          scan_full_page= True,
-          exclude_all_images=True,
-      )
-      result2 = await crawler.arun(
-          url=url,
-          config=config_next
-      )
-      if not result.success:
-        print('\n\n ERROR \n\n')
-        break
-      if result2.success:
-
-        if (result2.extracted_content and len(json.loads(result2.extracted_content)) > 100):
+    if result.success:
+      loop_limit = 5
+      while True:
+        print(' \n\n\n while loop \n\n\n')
+        loop_limit -= 1
+        if loop_limit == 0:
           break
 
-        len_result = len(json.loads(result2.extracted_content))
-        len_last_result = len(json.loads(result.extracted_content))
-        if len_result == len_last_result:
-          print(f'\n\n SAME LENGTH RESULT [{same_length}]\n\n')
-          same_length += 1
-          if same_length == 3:
+        config_next = CrawlerRunConfig(
+            extraction_strategy=JsonXPathExtractionStrategy(schema, verbose=True),
+            session_id=session_id,
+            js_code=js_next_page,
+            wait_for=wait_condition,
+            js_only=True,       # We're continuing from the open tab
+            cache_mode=CacheMode.BYPASS,
+            scan_full_page= True,
+            exclude_all_images=True,
+        )
+        result2 = await crawler.arun(
+            url=url,
+            config=config_next
+        )
+        if result2.success:
+          result = result2
+          if (result2.extracted_content and len(json.loads(result2.extracted_content)) > 100):
             break
-        result = result2
+
 
     if not result.success:
       log.warning("Crawl failed: %s", result.error_message)
