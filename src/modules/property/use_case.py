@@ -121,17 +121,15 @@ def get_properties(prompt: str) -> Dict[str, Any]:
   # for t in crawl['items']:
   #   print('---',t)
   property_links = [parsed_item['link'] for parsed_item in crawl['items']]
-  print('🚀 ~ property_links:', property_links[0:1])
-  per_page_data = run_async(crawl_per_page_currently(property_links[0:2]))
+
+  print(f'\n\n SCRAPING {len(property_links)} LINKS \n\n')
+
+  per_page_data = run_async(crawl_per_page_currently(property_links))
 
   for crawled_item in crawl['items']:
     for page_data in per_page_data:
       if crawled_item['link'] == page_data['url']:
         crawled_item['page_data'] = page_data
-
-
-  # for i in crawl2:
-  #   print('-----',i)
 
   crawl["destination"] = destination
   crawl.pop("headless", None)

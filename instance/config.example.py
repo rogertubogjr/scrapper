@@ -75,5 +75,6 @@ CRON_BOOKING_SITEMAP = os.getenv("CRON_BOOKING_SITEMAP", "0 * * * *")
 SITEMAP_DIR = os.getenv("SITEMAP_DIR", "/app/sitemap_data")
 SITEMAP_WORKER_THREADS = _get_int("SITEMAP_WORKER_THREADS", 4)
 PARALLEL_URL_TO_SCRAPE = _get_int("PARALLEL_URL_TO_SCRAPE", 10)
+MAX_PROPERTY_TO_SCRAPE = _get_int("MAX_PROPERTY_TO_SCRAPE", 25)
 
 SQLALCHEMY_DATABASE_URI = "postgresql://postgres:password@db/db"

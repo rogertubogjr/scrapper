@@ -6,6 +6,8 @@ import logging
 import os
 from typing import Any, Dict, List
 
+from src.scheduler.booking_sitemap.utils import get_env_int
+
 from crawl4ai import (
   AsyncWebCrawler,
   BrowserConfig,
@@ -21,6 +23,8 @@ log = logging.getLogger(__name__)
 
 async def run_crawler(url: str) -> Dict[str, Any]:
   headless_mode = _get_bool("PLAYWRIGHT_HEADLESS", True)
+  max_property = get_env_int('MAX_PROPERTY_TO_SCRAPE', 25)
+
   artifact_directory = os.getenv("PLAYWRIGHT_ARTIFACT_DIR", os.path.join(os.getcwd(), "artifacts"))
   try:
     os.makedirs(artifact_directory, exist_ok=True)
@@ -41,26 +45,35 @@ async def run_crawler(url: str) -> Dict[str, Any]:
       proxy_config["password"] = proxy_password
 
   browser_config = BrowserConfig(headless=headless_mode, proxy_config=proxy_config)
-  property_cards_ready_script = """() => {
-        const items = document.querySelectorAll('[data-testid=\"property-card\"]');
-        return items.length > 3;
-    }"""
+  property_cards_ready_script = f"""() => {{
+        const el = Array.from(document.querySelectorAll("h1"))
+          .find(el => el.textContent.trim().includes("properties found"));
+
+        const items = document.querySelectorAll('[data-testid="property-card"]');
+        const threshold = {max_property};
+
+        let no_of_properties = null;
+        if (el) {{
+          const match = el.textContent.match(/\\d+/);  // 👈 double backslash
+          if (match) {{
+            no_of_properties = parseInt(match[0], 10);
+          }}
+        }}
+
+        if(no_of_properties < threshold && items.length == no_of_properties) {{
+          return true
+        }} else if(no_of_properties < threshold && no_of_properties < items.length) {{
+          return true
+        }} else if(no_of_properties > threshold && items.length > 5) {{
+          return true
+        }}
+    }}"""
   load_more_results_script = """
       const btn = Array.from(document.querySelectorAll("button span"))
       .find(el => el.textContent.trim() === "Load more results");
       console.log('Trii-------')
       btn?.click();
   """
-  wait_until_no_load_more = """js:() => {
-      const btn = Array.from(document.querySelectorAll("button span"))
-      .find(el => el.textContent.trim() === "Load more results");
-
-      if(btn) {
-          return false
-      } else {
-          return true
-      }
-  }"""
   session_identifier = "hoter_properties"
 
   schema = {
@@ -120,43 +133,35 @@ async def run_crawler(url: str) -> Dict[str, Any]:
       config=initial_run_config,
     )
 
-    remaining_iterations = 10
-    same_length_count = 0
-    while True:
-      remaining_iterations -= 1
-      if remaining_iterations == 0:
-        break
-
-      pagination_config = CrawlerRunConfig(
-          extraction_strategy=JsonXPathExtractionStrategy(schema, verbose=True),
-          session_id=session_identifier,
-          js_code=load_more_results_script,
-          wait_for=wait_until_no_load_more,
-          js_only=True,
-          cache_mode=CacheMode.BYPASS,
-          scan_full_page=True,
-          exclude_all_images=True,
-      )
-      pagination_result = await crawler.arun(
-          url=url,
-          config=pagination_config
-      )
-      if not result.success:
-        print('\n\n ERROR \n\n')
-        break
-      if pagination_result.success:
-
-        if (pagination_result.extracted_content and len(json.loads(pagination_result.extracted_content)) > 100):
-          break
-
-        pagination_length = len(json.loads(pagination_result.extracted_content))
-        current_length = len(json.loads(result.extracted_content))
-        if pagination_length == current_length:
-          print(f'\n\n SAME LENGTH RESULT [{same_length_count}]\n\n')
-          same_length_count += 1
-          if same_length_count == 3:
+    if result.success:
+      if (result.extracted_content and len(json.loads(result.extracted_content)) < max_property):
+        remaining_iterations = 5
+        while True:
+          remaining_iterations -= 1
+          if remaining_iterations == 0:
             break
-        result = pagination_result
+
+          pagination_config = CrawlerRunConfig(
+              extraction_strategy=JsonXPathExtractionStrategy(schema, verbose=True),
+              session_id=session_identifier,
+              js_code=load_more_results_script,
+              wait_for=property_cards_ready_script,
+              js_only=True,
+              cache_mode=CacheMode.BYPASS,
+              scan_full_page=True,
+              exclude_all_images=True,
+          )
+          pagination_result = await crawler.arun(
+              url=url,
+              config=pagination_config
+          )
+          if not result.success:
+            print('\n\n ERROR \n\n')
+            break
+          if pagination_result.success:
+            result = pagination_result
+            if (pagination_result.extracted_content and len(json.loads(pagination_result.extracted_content)) > 25):
+              break
 
     if not result.success:
       log.warning("Crawl failed: %s", result.error_message)
@@ -208,8 +213,8 @@ async def run_crawler(url: str) -> Dict[str, Any]:
       log.debug("Failed parsing extracted content: %s", exc)
 
     return {
-      "count": len(parsed_items),
-      "items": parsed_items,
+      "count": max_property,
+      "items": parsed_items[0:max_property],
       "source": "crawl4ai",
       "headless": headless_mode,
     }
