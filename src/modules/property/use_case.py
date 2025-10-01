@@ -1,388 +1,27 @@
-import os, json, re, asyncio, logging, time, gzip, requests
-from base64 import b64decode
-from typing import Any, Dict, List, Iterator, Optional
-from crawl4ai import (
-  AsyncWebCrawler,
-  BrowserConfig,
-  CacheMode,
-  CrawlerRunConfig,
-  JsonXPathExtractionStrategy,
-)
-from agents import Runner
+import asyncio
+import json
+import logging
+import time
 from datetime import date, timedelta
-import xml.etree.ElementTree as ET
+from typing import Any, Dict
 
-from flask import current_app
-from playwright.async_api import async_playwright
 from src.agent_helpers.destination_extractor import ah_destination_extractor
 from src.agent_helpers.booking_search_url_agent import booking_search_url_agent
 from src.handler.error_handler import InvalidDataError, NotFoundError, UnexpectedError
+from src.modules.property.services import (
+  _get_bool,
+  run_agent_action,
+  run_async,
+  run_crawler,
+  crawl_per_page_currently,
+  run_playwright,
+)
 
 log = logging.getLogger(__name__)
 
 
-_RUNNER_LOOP: Optional[asyncio.AbstractEventLoop] = None
-
-
-def run_async(coro):
-  """Run async coroutine from sync context using a persistent event loop."""
-  try:
-    running_loop = asyncio.get_running_loop()
-  except RuntimeError:
-    running_loop = None
-
-  if running_loop and running_loop.is_running():
-    raise RuntimeError("run_async cannot execute inside an active event loop")
-
-  global _RUNNER_LOOP
-  if _RUNNER_LOOP is None or _RUNNER_LOOP.is_closed():
-    _RUNNER_LOOP = asyncio.new_event_loop()
-    asyncio.set_event_loop(_RUNNER_LOOP)
-
-  return _RUNNER_LOOP.run_until_complete(coro)
-
-
-def _get_bool(name: str, default: bool) -> bool:
-  cfg = current_app.config if current_app else {}
-  v = cfg.get(name)
-  if v is None:
-    v = os.getenv(name)
-  if v is None:
-    return default
-  return str(v).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _get_str(name: str, default: Optional[str] = None) -> Optional[str]:
-  """Return a config/environment string with fallback whitespace stripping."""
-  cfg = current_app.config if current_app else {}
-  v = cfg.get(name)
-  if v is None:
-    v = os.getenv(name)
-  if v is None:
-    return default
-  v = str(v).strip()
-  return v or default
-
-
-async def run_agent_action(input_data, agent, session=None, return_final_output=False):
-  result = await Runner.run(
-    agent,
-    input_data,
-    session=session,
-  )
-  if return_final_output:
-    return result.final_output
-  try:
-    action = re.sub(r"```(?:json)?|```", "", result.final_output).strip()
-    return json.loads(action)
-  except Exception as e:
-    print("Invalid JSON:", action, e)
-    raise ValueError("Error occur on running agent")
-
-
-async def run_crawler(url) -> Dict[str, Any]:
-  headless = _get_bool("PLAYWRIGHT_HEADLESS", True)
-  artifact_dir = os.getenv("PLAYWRIGHT_ARTIFACT_DIR", os.path.join(os.getcwd(), "artifacts"))
-  try:
-    os.makedirs(artifact_dir, exist_ok=True)
-  except Exception:
-    pass
-
-  proxy_server = _get_str("PLAYWRIGHT_PROXY_SERVER")
-  proxy_username = _get_str("PLAYWRIGHT_PROXY_USERNAME")
-  proxy_password = _get_str("PLAYWRIGHT_PROXY_PASSWORD")
-
-  proxy_cfg = None
-  proxy_enabled = _get_bool("PROXY_ENABLED", False)
-  if proxy_enabled and proxy_server:
-    proxy_cfg = {"server": proxy_server}
-    if proxy_username:
-      proxy_cfg["username"] = proxy_username
-    if proxy_password:
-      proxy_cfg["password"] = proxy_password
-
-  browser_cfg = BrowserConfig(headless=headless, proxy_config=proxy_cfg)
-  wait_condition = """() => {
-        const items = document.querySelectorAll('[data-testid=\"property-card\"]');
-        return items.length > 3;
-    }"""
-  js_next_page = """
-      const btn = Array.from(document.querySelectorAll("button span"))
-      .find(el => el.textContent.trim() === "Load more results");
-      console.log('Trii-------')
-      btn?.click();
-  """
-  wait_for_more = """js:() => {
-      const btn = Array.from(document.querySelectorAll("button span"))
-      .find(el => el.textContent.trim() === "Load more results");
-
-      if(btn) {
-          return false
-      } else {
-          return true
-      }
-  }"""
-  session_id = "hoter_properties"
-
-  schema = {
-    "name": "Hotels",
-    "baseSelector": "//div[@data-testid='property-card']",
-    "fields": [
-      {
-        "name": "title",
-        "selector": ".//div[@data-testid='title']",
-        "type": "text",
-      },
-      {
-        "name": "link",
-        "selector": ".//a[contains(@href,'/hotel/')][1]",
-        "type": "attribute",
-        "attribute": "href",
-      },
-      {
-        "name": "location",
-        "selector": ".//span[contains(text(),'km') or contains(text(),'from') or contains(text(),'Show on map')]/..",
-        "type": "text",
-      },
-      {
-        "name": "rating_reviews",
-        "selector": ".//div[@data-testid='review-score' or .//span[contains(text(),'review')]]",
-        "type": "text",
-      },
-      {
-        "name": "room_info",
-        "selector": ".//div[contains(., 'Room') or .//h4]",
-        "type": "text",
-      },
-      {
-        "name": "price",
-        "selector": ".//span[@data-testid='price-and-discounted-price']",
-        "type": "text",
-      },
-      {
-        "name": "fees",
-        "selector": ".//div[contains(., 'tax') or contains(., 'fee')]",
-        "type": "text",
-      },
-    ],
-  }
-
-  config = CrawlerRunConfig(
-    extraction_strategy=JsonXPathExtractionStrategy(schema, verbose=True),
-    wait_for=f"js:{wait_condition}",
-    scan_full_page=True,
-    exclude_all_images=True,
-    session_id = session_id
-    # scroll_delay=1.2,
-  )
-
-
-  async with AsyncWebCrawler(verbose=True, config=browser_cfg) as crawler:
-    result = await crawler.arun(
-      url=url,
-      config=config,
-    )
-
-    loop_limit = 10
-    same_length = 0
-    while True:
-      loop_limit -= 1
-      if loop_limit == 0:
-        break
-
-      config_next = CrawlerRunConfig(
-          extraction_strategy=JsonXPathExtractionStrategy(schema, verbose=True),
-          session_id=session_id,
-          js_code=js_next_page,
-          wait_for=wait_for_more,
-          js_only=True,       # We're continuing from the open tab
-          cache_mode=CacheMode.BYPASS,
-          scan_full_page= True,
-          exclude_all_images=True,
-      )
-      result2 = await crawler.arun(
-          url=url,
-          config=config_next
-      )
-      if not result.success:
-        print('\n\n ERROR \n\n')
-        break
-      if result2.success:
-
-        if (result2.extracted_content and len(json.loads(result2.extracted_content)) > 100):
-          break
-
-        len_result = len(json.loads(result2.extracted_content))
-        len_last_result = len(json.loads(result.extracted_content))
-        if len_result == len_last_result:
-          print(f'\n\n SAME LENGTH RESULT [{same_length}]\n\n')
-          same_length += 1
-          if same_length == 3:
-            break
-        result = result2
-
-    if not result.success:
-      log.warning("Crawl failed: %s", result.error_message)
-      return {
-        "count": 0,
-        "items": [],
-        "source": "crawl4ai",
-        "headless": headless,
-        "error": result.error_message or "crawl_failed",
-      }
-
-    items: List[Dict[str, str]] = []
-    try:
-      raw = result.extracted_content or "[]"
-      data = json.loads(raw)
-      if isinstance(data, list):
-        for x in data:
-          if not isinstance(x, dict):
-            continue
-          itm: Dict[str, str] = {}
-          title = x.get("title")
-          link = x.get("link")
-          location = x.get("location")
-          rating = x.get("rating_reviews")
-          room_info = x.get("room_info")
-          price = x.get("price")
-          fees = x.get("fees")
-
-          if isinstance(title, str) and title.strip():
-            itm["title"] = title.strip()
-          if isinstance(link, str) and link.strip():
-            l = link.strip()
-            if l.startswith("/"):
-              l = "https://www.booking.com" + l
-            itm["link"] = l
-          if isinstance(location, str) and location.strip():
-            itm["location"] = location.strip().replace('Show on map','')
-          if isinstance(rating, str) and rating.strip():
-            itm["rating_reviews"] = rating.strip()
-          if isinstance(room_info, str) and room_info.strip():
-            itm["room_info"] = room_info.strip()
-          if isinstance(price, str) and price.strip():
-            itm["price"] = price.strip()
-          if isinstance(fees, str) and fees.strip():
-            itm["fees"] = fees.strip()
-          if itm:
-            items.append(itm)
-    except Exception as e:
-      log.debug("Failed parsing extracted content: %s", e)
-
-    return {
-      "count": len(items),
-      "items": items,
-      "source": "crawl4ai",
-      "headless": headless,
-    }
-
-
-async def run_playwright(url) -> Dict[str, Any]:
-  """Scrape availability links using raw Playwright.
-
-  - Keeps the Booking URL static (no env keys for URL).
-  - Respects PLAYWRIGHT_HEADLESS and PLAYWRIGHT_ARTIFACT_DIR for runtime behavior.
-  - Returns the same shape as run_crawler for consistency.
-  """
-  headless = _get_bool("PLAYWRIGHT_HEADLESS", True)
-  artifact_dir = os.getenv("PLAYWRIGHT_ARTIFACT_DIR", os.path.join(os.getcwd(), "artifacts"))
-  try:
-    os.makedirs(artifact_dir, exist_ok=True)
-  except Exception:
-    pass
-
-  items: List[Dict[str, str]] = []
-
-  proxy_server = _get_str("PLAYWRIGHT_PROXY_SERVER")
-  proxy_username = _get_str("PLAYWRIGHT_PROXY_USERNAME")
-  proxy_password = _get_str("PLAYWRIGHT_PROXY_PASSWORD")
-  proxy_enabled = _get_bool("PROXY_ENABLED", False)
-
-  proxy_settings = None
-  if proxy_enabled and proxy_server:
-    proxy_settings = {"server": proxy_server}
-    if proxy_username:
-      proxy_settings["username"] = proxy_username
-    if proxy_password:
-      proxy_settings["password"] = proxy_password
-
-  async with async_playwright() as pw:
-    browser = await pw.chromium.launch(
-      headless=headless,
-      args=[
-        "--disable-blink-features=AutomationControlled",
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-      ],
-      proxy=proxy_settings,
-    )
-    context = await browser.new_context(
-      user_agent=(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/116.0.5845.110 Safari/537.36"
-      ),
-      viewport={"width": 1366, "height": 768},
-      locale="en-US",
-      extra_http_headers={
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-    )
-
-    await context.add_init_script(
-      "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-    )
-
-    page = await context.new_page()
-    await page.goto(url, wait_until="domcontentloaded")
-    try:
-      await page.wait_for_load_state("networkidle", timeout=7000)
-    except Exception:
-      pass
-
-    results = await page.evaluate("""() => {
-            return Array.from(
-            document.querySelectorAll('input[type=\"checkbox\"]')
-            )
-            .filter(el => {
-            const aria = el.getAttribute('aria-label');
-            return el.name && el.value && aria && aria.trim() !== '';
-            })
-            .map(el => ({
-            name: el.name,
-            value: el.value,
-            ariaLabel: el.getAttribute('aria-label').trim()
-            }));
-        }""")
-
-    checkbox_filter_code = ""
-
-    for i in results:
-      filter = i["ariaLabel"].split(":")[0]
-      code = i["value"].replace("=", "%3D")
-      checkbox_filter_code += f"• {filter} → {code}\n"
-
-    await context.close()
-    await browser.close()
-
-    return checkbox_filter_code
-
-  return {
-    "count": len(items),
-    "items": items,
-    "source": "playwright",
-    "headless": headless,
-  }
-
-
 def get_properties(prompt: str) -> Dict[str, Any]:
-  """Extract destination from a free‑form prompt using the agent.
-
-  - Validates input and enforces a timeout to avoid hanging requests.
-  - Maps errors to typed HTTP-friendly exceptions.
-  - Returns a structured dict: { destination, source, duration_ms }.
-  """
+  """Extract destination from a free-form prompt using the agent."""
   if not isinstance(prompt, str):
     raise InvalidDataError("Field 'prompt' must be a string.")
   prompt = prompt.strip()
@@ -409,12 +48,12 @@ def get_properties(prompt: str) -> Dict[str, Any]:
     raise UnexpectedError("Destination extraction timed out.")
   except InvalidDataError:
     raise
-  except Exception as e:
+  except Exception as exc:
     duration_ms = int((time.monotonic() - started) * 1000)
     log.exception(
       "destination extraction failed; duration_ms=%d error=%s",
       duration_ms,
-      e,
+      exc,
     )
     raise UnexpectedError("Destination extraction failed.")
 
@@ -456,9 +95,10 @@ def get_properties(prompt: str) -> Dict[str, Any]:
     return mapping
 
   raw_filters = run_async(run_playwright(initial_url))
-  print('\n\n********raw_filters',raw_filters, '\n\n')
+  print('\n\n********raw_filters', raw_filters, '\n\n')
   filters_map = _parse_checkbox_filters(raw_filters)
   filters_json = json.dumps(filters_map, ensure_ascii=False)
+  print('\n\n filters_json', filters_json)
 
   url_agent = booking_search_url_agent(filters_json)
   url_data = run_async(run_agent_action(prompt, url_agent, None, False))
@@ -477,6 +117,22 @@ def get_properties(prompt: str) -> Dict[str, Any]:
       "source": "crawl4ai",
       "headless": _get_bool("PLAYWRIGHT_HEADLESS", True),
     }
+
+  # for t in crawl['items']:
+  #   print('---',t)
+  property_links = [parsed_item['link'] for parsed_item in crawl['items']]
+  print('🚀 ~ property_links:', property_links[0:1])
+  per_page_data = run_async(crawl_per_page_currently(property_links[0:2]))
+
+  for crawled_item in crawl['items']:
+    for page_data in per_page_data:
+      if crawled_item['link'] == page_data['url']:
+        crawled_item['page_data'] = page_data
+
+
+  # for i in crawl2:
+  #   print('-----',i)
+
   crawl["destination"] = destination
   crawl.pop("headless", None)
   crawl.pop("url", None)
