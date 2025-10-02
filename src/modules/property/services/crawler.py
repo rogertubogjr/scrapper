@@ -5,6 +5,7 @@ import re
 import logging
 import os
 from typing import Any, Dict, List
+from concurrent.futures import ThreadPoolExecutor
 
 from src.scheduler.booking_sitemap.utils import get_env_int
 
@@ -219,12 +220,93 @@ async def run_crawler(url: str) -> Dict[str, Any]:
       "headless": headless_mode,
     }
 
+def structure_data(data, url):
+  page_data = []
+
+  for item in data:
+    info_prices = []
+    counter = -1
+    location = ''
+    property_description = ''
+    facilities = []
+
+    if 'location' in item:
+      location = item['location'].split('After booking')[0].split('Excellent location')[0]
+    if 'property_description' in item:
+      property_description = item['property_description']
+    if 'area_info' in item:
+      for x in item['area_info']:
+        x['areas'] = [y['area'] for y in x['areas']]
+    if 'facilities' in item:
+      facilities = [x['facility'] for x in item['facilities']]
+
+    if 'price_info' in item:
+      for price_info in item['price_info']:
+        if 'room_type' in price_info and 'occupancy' in price_info:
+          if 'room_type' in price_info:
+            info_price = dict(
+              room_type = '',
+              room_category = []
+            )
+            info_price['room_type'] = re.sub(r'\n+| {2,}', lambda m: '\n' if '\n' in m.group() else ' ', price_info['room_type'])
+            info_prices.append(info_price)
+            counter += 1
+
+        if 'occupancy' in price_info:
+          info_prices[counter]['room_category'].append(dict(
+            occupancy = re.sub(r'\n+| {2,}', lambda m: '\n' if '\n' in m.group() else ' ', price_info['occupancy']),
+            payable = (re.sub(r'\n+| {2,}', lambda m: '\n' if '\n' in m.group() else ' ', price_info['payable'])).replace('\xa0', ' '),
+            conditions = price_info['conditions']
+          ))
+
+    page_data.append(dict(
+      property_description = property_description,
+      location = location,
+      facilities = facilities,
+      info_prices = info_prices,
+      area_info = item['area_info'],
+      url = url
+    ))
+
+  return page_data
+
+async def retry_crawl_page(crawler, wait_condition, schema, url, session_id):
+  print('\n\n\n retry_crawl_page \n\n\n')
+
+  config = CrawlerRunConfig(
+      extraction_strategy=JsonXPathExtractionStrategy(schema, verbose=True),
+      wait_for=f"js:{wait_condition}",
+      scan_full_page=True,
+      exclude_all_images = True,
+      session_id = session_id
+  )
+
+  result = await crawler.arun(
+    url=url,
+    config=config
+  )
+
+  if not result.success or not result.extracted_content:
+    log.debug("retry_crawl_page crawl failed for %s: %s", result.url, result.error_message)
+    return []
+
+  raw = result.extracted_content or "[]"
+  data = json.loads(raw)
+
+  if not isinstance(data, list):
+    return []
+
+  return structure_data(data, result.url)
+
+
+
 
 async def crawl_per_page_currently(urls):
   if not urls:
     return []
 
   headless = _get_bool("PLAYWRIGHT_HEADLESS", True)
+  session_id = 'crawl_per_page'
 
   browser_cfg = BrowserConfig(headless=headless)
   wait_condition = """() => {
@@ -235,6 +317,11 @@ async def crawl_per_page_currently(urls):
   schema = {
     "baseSelector": "//div[@id='hotelTmpl']",
     "fields": [
+      {
+        "name": "property_description",
+        "selector": "//p[@data-testid='property-description']",
+        "type": "text",
+      },
       {
         "name": "location",
         "selector": "//div[@data-testid='PropertyHeaderAddressDesktop-wrapper']//button/div",
@@ -279,7 +366,6 @@ async def crawl_per_page_currently(urls):
                 "fields": [
                             {
                                 "name": "name",
-                                "selector": ".//div",
                                 "type": "text"
                             },
                         ]
@@ -318,10 +404,11 @@ async def crawl_per_page_currently(urls):
       extraction_strategy=JsonXPathExtractionStrategy(schema, verbose=True),
       wait_for=f"js:{wait_condition}",
       scan_full_page=True,
+      exclude_all_images = True
   )
   dispatcher = MemoryAdaptiveDispatcher(
       memory_threshold_percent=70.0,
-      max_session_permit=10,
+      max_session_permit=8,
   )
 
   async with AsyncWebCrawler(verbose=True, config=browser_cfg) as crawler:
@@ -336,6 +423,7 @@ async def crawl_per_page_currently(urls):
     for result in results:
       if not result.success or not result.extracted_content:
         log.debug("crawl failed for %s: %s", result.url, result.error_message)
+        page_data += await retry_crawl_page(crawler, wait_condition, schema, result.url, session_id)
         continue
 
       raw = result.extracted_content or "[]"
@@ -344,38 +432,6 @@ async def crawl_per_page_currently(urls):
       if not isinstance(data, list):
         continue
 
-      for item in data:
-        info_prices = []
-        counter = -1
-        location = ''
-        if 'location' in item:
-          location = item['location'].split('After booking')[0].split('Excellent location')[0]
-
-        if 'price_info' in item:
-          for price_info in item['price_info']:
-            if 'room_type' in price_info and 'occupancy' in price_info:
-              if 'room_type' in price_info:
-                info_price = dict(
-                  room_type = '',
-                  room_category = []
-                )
-                info_price['room_type'] = re.sub(r'\n+| {2,}', lambda m: '\n' if '\n' in m.group() else ' ', price_info['room_type'])
-                info_prices.append(info_price)
-                counter += 1
-
-            if 'occupancy' in price_info:
-              info_prices[counter]['room_category'].append(dict(
-                occupancy = re.sub(r'\n+| {2,}', lambda m: '\n' if '\n' in m.group() else ' ', price_info['occupancy']),
-                payable = (re.sub(r'\n+| {2,}', lambda m: '\n' if '\n' in m.group() else ' ', price_info['payable'])).replace('\xa0', ' '),
-                conditions = price_info['conditions']
-              ))
-
-        page_data.append(dict(
-          location = location,
-          facilities = item['facilities'],
-          info_prices = info_prices,
-          area_info = item['area_info'],
-          url = result.url
-        ))
+      page_data += structure_data(data, result.url)
 
     return page_data
