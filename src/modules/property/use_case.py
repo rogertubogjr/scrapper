@@ -94,6 +94,29 @@ def get_properties(prompt: str) -> Dict[str, Any]:
         mapping[name] = code
     return mapping
 
+  def _total_score(item: Dict[str, Any]) -> float:
+    property_score = item.get("property_score")
+    if isinstance(property_score, dict):
+      total = property_score.get("total_score")
+      if isinstance(total, (int, float)):
+        return float(total)
+      terms = property_score.get("terms")
+      if isinstance(terms, list):
+        running_total = 0.0
+        for term in terms:
+          if not isinstance(term, dict):
+            continue
+          value = term.get("score")
+          if isinstance(value, (int, float)):
+            running_total += float(value)
+          elif isinstance(value, str):
+            try:
+              running_total += float(value.strip())
+            except (TypeError, ValueError):
+              continue
+        return running_total
+    return float("-inf")
+
   raw_filters = run_async(run_playwright(initial_url))
   print('\n\n********raw_filters', raw_filters, '\n\n')
   filters_map = _parse_checkbox_filters(raw_filters)
@@ -137,6 +160,7 @@ def get_properties(prompt: str) -> Dict[str, Any]:
 
   if key_terms:
     score_properties(crawl['items'], key_terms)
+    crawl['items'].sort(key=_total_score, reverse=True)
 
   crawl["destination"] = destination
   if key_terms:

@@ -13,6 +13,7 @@ from src.agent_helpers.property_keyword_scorer import property_keyword_scorer
 
 from .agent_runner import run_agent_action
 from .async_runner import run_async
+from .config import _get_int
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +64,8 @@ def score_properties(items: Sequence[Dict[str, Any]], key_terms: Sequence[str]) 
     return {"jobs": 0, "duration_ms": 0, "max_item_ms": 0}
 
   async def _score_all():
-    semaphore = asyncio.Semaphore(4)
+    concurrency = max(1, _get_int("PROPERTY_SCORING_CONCURRENCY", 4))
+    semaphore = asyncio.Semaphore(concurrency)
 
     async def _score(idx: int, link: str | None, payload: str):
       async with semaphore:
@@ -91,6 +93,23 @@ def score_properties(items: Sequence[Dict[str, Any]], key_terms: Sequence[str]) 
       max_item_ms = item_duration
     if isinstance(result, dict):
       result.pop("cleaned_payload", None)
+      total_score = 0
+      terms = result.get("terms")
+      if isinstance(terms, list):
+        for term in terms:
+          if not isinstance(term, dict):
+            continue
+          score_value = term.get("score")
+          if isinstance(score_value, (int, float)):
+            total_score += int(score_value)
+          elif isinstance(score_value, str):
+            stripped = score_value.strip()
+            if stripped:
+              try:
+                total_score += int(float(stripped))
+              except ValueError:
+                continue
+      result["total_score"] = total_score
       items[idx]["property_score"] = result
 
   log.debug(
