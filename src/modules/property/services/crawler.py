@@ -1,9 +1,6 @@
 """Crawl4AI-backed scraping helpers for property listings."""
 
-import json
-import re
-import logging
-import os
+import json, os, re, logging, string, random
 from typing import Any, Dict, List
 from concurrent.futures import ThreadPoolExecutor
 
@@ -18,7 +15,7 @@ from crawl4ai import (
   MemoryAdaptiveDispatcher,
 )
 
-from .config import _get_bool, _get_str
+from .config import _get_bool, _get_str, _get_float, _get_int
 log = logging.getLogger(__name__)
 
 
@@ -220,15 +217,16 @@ async def run_crawler(url: str) -> Dict[str, Any]:
       "headless": headless_mode,
     }
 
-def structure_data(data, url):
-  page_data = []
+def get_structure_data(data, url):
+  print('\n\n\n get_structure_data \n\n\n')
+  info_prices = []
+  location = ''
+  property_description = ''
+  facilities = []
+  area_info = None
 
   for item in data:
-    info_prices = []
     counter = -1
-    location = ''
-    property_description = ''
-    facilities = []
 
     if 'location' in item:
       location = item['location'].split('After booking')[0].split('Excellent location')[0]
@@ -237,6 +235,7 @@ def structure_data(data, url):
     if 'area_info' in item:
       for x in item['area_info']:
         x['areas'] = [y['area'] for y in x['areas']]
+      area_info = item['area_info']
     if 'facilities' in item:
       facilities = [x['facility'] for x in item['facilities']]
 
@@ -259,16 +258,17 @@ def structure_data(data, url):
             conditions = price_info['conditions']
           ))
 
-    page_data.append(dict(
-      property_description = property_description,
-      location = location,
-      facilities = facilities,
-      info_prices = info_prices,
-      area_info = item['area_info'],
-      url = url
-    ))
+  structure_data =  dict(
+    property_description = property_description,
+    location = location,
+    facilities = facilities,
+    info_prices = info_prices,
+    url = url
+  )
+  if area_info:
+    structure_data['area_info'] = area_info
 
-  return page_data
+  return structure_data
 
 async def retry_crawl_page(crawler, wait_condition, schema, url, session_id):
   print('\n\n\n retry_crawl_page \n\n\n')
@@ -290,13 +290,44 @@ async def retry_crawl_page(crawler, wait_condition, schema, url, session_id):
     log.debug("retry_crawl_page crawl failed for %s: %s", result.url, result.error_message)
     return []
 
+
   raw = result.extracted_content or "[]"
   data = json.loads(raw)
 
   if not isinstance(data, list):
     return []
 
-  return structure_data(data, result.url)
+  loop_limit = 3
+  area_info_status = any("area_info" in item for item in data)
+  while not area_info_status:
+    print(f' \n\n\n while loop \n\n\n', )
+    loop_limit -= 1
+    if loop_limit == 0:
+      break
+
+    config_next = CrawlerRunConfig(
+        extraction_strategy=JsonXPathExtractionStrategy(schema, verbose=True),
+        session_id=session_id,
+        wait_for=wait_condition,
+        js_only=True,       # We're continuing from the open tab
+        cache_mode=CacheMode.BYPASS,
+        scan_full_page= True,
+        exclude_all_images=True,
+    )
+    result2 = await crawler.arun(
+        url=url,
+        config=config_next
+    )
+
+
+    if result2.success:
+      data_extracted2 = json.loads(result2.extracted_content)
+      area_info_status = any("area_info" in item for item in data_extracted2)
+      data = data_extracted2
+    else:
+      print('\nNO DATA\n')
+
+  return get_structure_data(data, result.url)
 
 
 
@@ -306,7 +337,7 @@ async def crawl_per_page_currently(urls):
     return []
 
   headless = _get_bool("PLAYWRIGHT_HEADLESS", True)
-  session_id = 'crawl_per_page'
+  session_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=12))
 
   browser_cfg = BrowserConfig(headless=headless)
   wait_condition = """() => {
@@ -407,8 +438,8 @@ async def crawl_per_page_currently(urls):
       exclude_all_images = True
   )
   dispatcher = MemoryAdaptiveDispatcher(
-      memory_threshold_percent=70.0,
-      max_session_permit=8,
+      memory_threshold_percent=_get_float("CRAWLER_MEMORY_THRESHOLD_PERCENT", 85.0),
+      max_session_permit=_get_int("CRAWLER_MAX_SESSION_PERMIT", 5),
   )
 
   async with AsyncWebCrawler(verbose=True, config=browser_cfg) as crawler:
@@ -423,7 +454,7 @@ async def crawl_per_page_currently(urls):
     for result in results:
       if not result.success or not result.extracted_content:
         log.debug("crawl failed for %s: %s", result.url, result.error_message)
-        page_data += await retry_crawl_page(crawler, wait_condition, schema, result.url, session_id)
+        page_data.append(await retry_crawl_page(crawler, wait_condition, schema, result.url, session_id))
         continue
 
       raw = result.extracted_content or "[]"
@@ -432,6 +463,11 @@ async def crawl_per_page_currently(urls):
       if not isinstance(data, list):
         continue
 
-      page_data += structure_data(data, result.url)
+      structure_data = get_structure_data(data, result.url)
+      if 'area_info' in structure_data:
+        page_data.append(structure_data)
+      else:
+        structure_data = await retry_crawl_page(crawler, wait_condition, schema, result.url, session_id)
+        page_data.append(structure_data)
 
     return page_data

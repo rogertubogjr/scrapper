@@ -1,13 +1,22 @@
 """Utilities for executing async coroutines from synchronous contexts."""
 
 import asyncio
+import threading
 from typing import Optional
 
-_RUNNER_LOOP: Optional[asyncio.AbstractEventLoop] = None
+_THREAD_LOCAL: threading.local = threading.local()
+
+
+def _get_thread_loop() -> asyncio.AbstractEventLoop:
+  loop: Optional[asyncio.AbstractEventLoop] = getattr(_THREAD_LOCAL, "loop", None)
+  if loop is None or loop.is_closed():
+    loop = asyncio.new_event_loop()
+    _THREAD_LOCAL.loop = loop
+  return loop
 
 
 def run_async(coro):
-  """Run coroutine on a persistent event loop when no loop is active."""
+  """Run coroutine on a thread-local event loop to allow concurrent requests."""
   try:
     running_loop = asyncio.get_running_loop()
   except RuntimeError:
@@ -16,9 +25,6 @@ def run_async(coro):
   if running_loop and running_loop.is_running():
     raise RuntimeError("run_async cannot execute inside an active event loop")
 
-  global _RUNNER_LOOP
-  if _RUNNER_LOOP is None or _RUNNER_LOOP.is_closed():
-    _RUNNER_LOOP = asyncio.new_event_loop()
-    asyncio.set_event_loop(_RUNNER_LOOP)
-
-  return _RUNNER_LOOP.run_until_complete(coro)
+  loop = _get_thread_loop()
+  asyncio.set_event_loop(loop)
+  return loop.run_until_complete(coro)

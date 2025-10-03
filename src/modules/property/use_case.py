@@ -1,11 +1,8 @@
-import asyncio
-import json
-import logging
-import time
+import asyncio, copy, time, logging, json
 from datetime import date, timedelta
 from typing import Any, Dict
 
-from src.agent_helpers.destination_extractor import ah_destination_extractor
+from src.agent_helpers.destination_extractor import ah_destination_and_terms
 from src.agent_helpers.booking_search_url_agent import booking_search_url_agent
 from src.handler.error_handler import InvalidDataError, NotFoundError, UnexpectedError
 from src.modules.property.services import (
@@ -15,6 +12,7 @@ from src.modules.property.services import (
   run_crawler,
   crawl_per_page_currently,
   run_playwright,
+  score_properties,
 )
 
 log = logging.getLogger(__name__)
@@ -34,7 +32,7 @@ def get_properties(prompt: str) -> Dict[str, Any]:
   try:
     destination_data = run_async(
       asyncio.wait_for(
-        run_agent_action(prompt, ah_destination_extractor, None, False),
+        run_agent_action(prompt, ah_destination_and_terms, None, False),
         timeout=30,
       )
     )
@@ -58,8 +56,10 @@ def get_properties(prompt: str) -> Dict[str, Any]:
     raise UnexpectedError("Destination extraction failed.")
 
   destination = None
+  key_terms = []
   if isinstance(destination_data, dict):
     destination = destination_data.get("destination")
+    key_terms = destination_data.get("key_terms") or []
 
   if not isinstance(destination, str) or not destination.strip():
     raise NotFoundError("No destination extracted from the prompt.")
@@ -118,20 +118,29 @@ def get_properties(prompt: str) -> Dict[str, Any]:
       "headless": _get_bool("PLAYWRIGHT_HEADLESS", True),
     }
 
-  # for t in crawl['items']:
-  #   print('---',t)
   property_links = [parsed_item['link'] for parsed_item in crawl['items']]
 
   print(f'\n\n SCRAPING {len(property_links)} LINKS \n\n')
 
   per_page_data = run_async(crawl_per_page_currently(property_links))
 
-  for crawled_item in crawl['items']:
+  for idx, crawled_item in enumerate(crawl['items']):
+    property_data = None
     for page_data in per_page_data:
       if crawled_item['link'] == page_data['url']:
-        crawled_item['page_data'] = page_data
+        property_data = copy.deepcopy(page_data)
+    if property_data:
+      crawled_item['page_data'] = property_data
+      crawled_item['location'] = property_data['location']
+      del property_data['url']
+      del crawled_item['page_data']['location']
+
+  if key_terms:
+    score_properties(crawl['items'], key_terms)
 
   crawl["destination"] = destination
+  if key_terms:
+    crawl["key_terms"] = key_terms
   crawl.pop("headless", None)
   crawl.pop("url", None)
   return crawl

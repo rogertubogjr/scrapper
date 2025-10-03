@@ -26,3 +26,23 @@ def _get_str(name: str, default: Optional[str] = None) -> Optional[str]:
     return default
   v = str(v).strip()
   return v or default
+
+
+def _get_int(name: str, default: int) -> int:
+  value = _get_str(name)
+  if value is None:
+    return default
+  try:
+    return int(value)
+  except (TypeError, ValueError):
+    return default
+
+
+def _get_float(name: str, default: float) -> float:
+  value = _get_str(name)
+  if value is None:
+    return default
+  try:
+    return float(value)
+  except (TypeError, ValueError):
+    return default

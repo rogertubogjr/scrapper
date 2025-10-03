@@ -38,6 +38,16 @@ def _get_str(name: str, default: Optional[str] = None) -> Optional[str]:
     return val or default
 
 
+def _get_float(name: str, default: float) -> float:
+    val = os.getenv(name)
+    if val is None or not str(val).strip():
+        return default
+    try:
+        return float(str(val).strip())
+    except ValueError:
+        return default
+
+
 # Load environment variables from a .env file if present
 load_dotenv()
 
@@ -76,5 +86,7 @@ SITEMAP_DIR = os.getenv("SITEMAP_DIR", "/app/sitemap_data")
 SITEMAP_WORKER_THREADS = _get_int("SITEMAP_WORKER_THREADS", 4)
 PARALLEL_URL_TO_SCRAPE = _get_int("PARALLEL_URL_TO_SCRAPE", 10)
 MAX_PROPERTY_TO_SCRAPE = _get_int("MAX_PROPERTY_TO_SCRAPE", 25)
+CRAWLER_MEMORY_THRESHOLD_PERCENT = _get_float("CRAWLER_MEMORY_THRESHOLD_PERCENT", 95.0)
+CRAWLER_MAX_SESSION_PERMIT = _get_int("CRAWLER_MAX_SESSION_PERMIT", 8)
 
 SQLALCHEMY_DATABASE_URI = "postgresql://postgres:password@db/db"
