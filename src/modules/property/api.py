@@ -4,12 +4,16 @@ from flask import request
 import json, re, requests
 
 from .use_case import get_properties
+from .test import test
 
 # middleare
 from src.middlewares.api_auth_token import requires
 
 
 class Properties(Resource):
+  def get(self):
+    return test()
+
   method_decorators = [requires()]
 
   def post(self):
