@@ -1,4 +1,4 @@
-import asyncio, copy, time, logging, json
+import asyncio, copy, time, logging, json, string, random
 from datetime import date, timedelta
 from typing import Any, Dict
 
@@ -13,6 +13,7 @@ from src.modules.property.services import (
   crawl_per_page_currently,
   run_playwright,
   score_properties,
+  filter_crawler
 )
 
 log = logging.getLogger(__name__)
@@ -20,6 +21,8 @@ log = logging.getLogger(__name__)
 
 def get_properties(prompt: str) -> Dict[str, Any]:
   """Extract destination from a free-form prompt using the agent."""
+  session_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=12))
+
   if not isinstance(prompt, str):
     raise InvalidDataError("Field 'prompt' must be a string.")
   prompt = prompt.strip()
@@ -117,11 +120,11 @@ def get_properties(prompt: str) -> Dict[str, Any]:
         return running_total
     return float("-inf")
 
-  raw_filters = run_async(run_playwright(initial_url))
-  print('\n\n********raw_filters', raw_filters, '\n\n')
-  filters_map = _parse_checkbox_filters(raw_filters)
+  filters_map = run_async(filter_crawler(initial_url, session_id))
+
+  # raw_filters = run_async(run_playwright(initial_url))
+  # filters_map = _parse_checkbox_filters(raw_filters)
   filters_json = json.dumps(filters_map, ensure_ascii=False)
-  print('\n\n filters_json', filters_json)
 
   url_agent = booking_search_url_agent(filters_json)
   url_data = run_async(run_agent_action(prompt, url_agent, None, False))
@@ -131,7 +134,6 @@ def get_properties(prompt: str) -> Dict[str, Any]:
   final_url = url_data["url"]
 
   print(f'\n\nfinal_url {final_url} \n\n')
-
   crawl = run_async(run_crawler(final_url))
   if not isinstance(crawl, dict):
     crawl = {

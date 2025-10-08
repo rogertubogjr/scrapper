@@ -218,7 +218,6 @@ async def run_crawler(url: str) -> Dict[str, Any]:
     }
 
 def get_structure_data(data, url):
-  print('\n\n\n get_structure_data \n\n\n')
   info_prices = []
   location = ''
   property_description = ''
