@@ -152,7 +152,7 @@ def get_properties(prompt: str) -> Dict[str, Any]:
   for idx, crawled_item in enumerate(crawl['items']):
     property_data = None
     for page_data in per_page_data:
-      if crawled_item['link'] == page_data['url']:
+      if 'url' in page_data and crawled_item['link'] == page_data['url']:
         property_data = copy.deepcopy(page_data)
     if property_data:
       crawled_item['page_data'] = property_data
